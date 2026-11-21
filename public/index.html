@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#07030d" />
+    <title>DeepAI Proxy · Painel</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="aurora" aria-hidden="true">
+      <span class="blob blob-a"></span>
+      <span class="blob blob-b"></span>
+      <span class="blob blob-c"></span>
+    </div>
+    <div class="grid-overlay" aria-hidden="true"></div>
+
+    <div class="app" id="app">
+      <header class="topbar glass">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="22" height="22" fill="none">
+              <path d="M16 2.8 27.4 9.4v13.2L16 29.2 4.6 22.6V9.4L16 2.8Z" stroke="url(#brandGrad)" stroke-width="1.6" />
+              <path d="M16 9.4 22 13v6l-6 3.6L10 19v-6l6-3.6Z" fill="url(#brandGrad)" opacity=".9" />
+              <defs>
+                <linearGradient id="brandGrad" x1="4" y1="3" x2="28" y2="30" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#e9d5ff" />
+                  <stop offset=".5" stop-color="#a855f7" />
+                  <stop offset="1" stop-color="#d946ef" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </span>
+          <span class="brand-text">DeepAI <strong>Proxy</strong></span>
+        </div>
+        <div class="topbar-right">
+          <span class="status-pill" id="serverStatus"><i></i><span>Online</span></span>
+          <button class="icon-btn" id="lockBtn" type="button" title="Trocar token de administrador" aria-label="Trocar token de administrador">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4.5" y="10.5" width="15" height="10" rx="2.5" />
+              <path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+
+      <nav class="tabs glass" id="tabs" role="tablist" aria-label="Seções do painel">
+        <button class="tab active" data-tab="login" type="button" role="tab" aria-selected="true">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 13.5 13.5 10.5"/><path d="M7 17H5.5A3.5 3.5 0 0 1 2 13.5v0A3.5 3.5 0 0 1 5.5 10H8"/><path d="M17 7h1.5A3.5 3.5 0 0 1 22 10.5v0A3.5 3.5 0 0 1 18.5 14H16"/></svg>
+          <span>Login</span>
+        </button>
+        <button class="tab" data-tab="panel" type="button" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V10"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg>
+          <span>Painel</span>
+        </button>
+        <button class="tab" data-tab="models" type="button" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 8.5 4.7L12 12.4 3.5 7.7 12 3Z"/><path d="m4 12 8 4.5 8-4.5"/><path d="m4 16.3 8 4.5 8-4.5"/></svg>
+          <span>Modelos</span>
+        </button>
+        <button class="tab" data-tab="access" type="button" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="3.5"/><path d="m10.5 12.5 8-8"/><path d="m15 6 2.5 2.5"/><path d="m17.5 3.5 3 3"/></svg>
+          <span>Acesso</span>
+        </button>
+      </nav>
+
+
+      <main>
+        <section class="tab-view" id="view-login" data-view="login">
+          <section class="hero hero-compact">
+            <div class="eyebrow"><span class="spark"></span> Login</div>
+            <h1>Conecte suas contas <span class="grad">DeepAI</span>.</h1>
+            <p>
+              Gere o link oficial e aprove no navegador. O proxy guarda só a
+              credencial criptografada — sem senha, sem cookie, sem gambiarra.
+            </p>
+          </section>
+          <section class="glass card login-card login-solo" id="loginCard">
+            <div class="card-head">
+              <div>
+                <span class="card-kicker">Login</span>
+                <h2>Adicionar conta</h2>
+              </div>
+              <span class="badge-soft">desktop_auth</span>
+            </div>
+
+            <ol class="steps" id="steps">
+              <li class="step active" data-step="1"><span class="step-dot">1</span><span>Gerar link</span></li>
+              <li class="step" data-step="2"><span class="step-dot">2</span><span>Aprovar</span></li>
+              <li class="step" data-step="3"><span class="step-dot">3</span><span>Pronto</span></li>
+            </ol>
+
+            <div id="loginStart">
+              <button class="btn btn-primary btn-lg" id="startBtn" type="button">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10.5 13.5 13.5 10.5" />
+                  <path d="M7.2 16.8 5.4 18.6a3.9 3.9 0 0 1-5.5-5.5l3.6-3.6a3.9 3.9 0 0 1 5.5 0" transform="translate(2.2 -1.2) scale(.82)" />
+                  <path d="M16.8 7.2 18.6 5.4a3.9 3.9 0 0 1 5.5 5.5l-3.6 3.6a3.9 3.9 0 0 1-5.5 0" transform="translate(-1.2 2.2) scale(.82)" />
+                </svg>
+                Gerar link de login
+              </button>
+              <p class="hint">
+                Abre a página oficial da DeepAI. O código volta para
+                <code>127.0.0.1</code> e é trocado pela API key uma única vez.
+              </p>
+            </div>
+
+            <div class="link-panel hidden" id="linkPanel" aria-live="polite">
+              <label for="loginUrl">Link de login</label>
+              <div class="copy-field">
+                <input id="loginUrl" readonly />
+                <button class="copy-btn" id="copyLinkBtn" type="button" title="Copiar link">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="8" y="8" width="12" height="12" rx="2.5" />
+                    <path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8" />
+                  </svg>
+                  <span>Copiar</span>
+                </button>
+              </div>
+              <div class="link-actions">
+                <a class="btn btn-ghost" id="openLinkBtn" href="#" target="_blank" rel="noreferrer noopener">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M14 4h6v6" />
+                    <path d="M20 4 11 13" />
+                    <path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
+                  </svg>
+                  Abrir navegador
+                </a>
+                <button class="btn btn-ghost" id="restartBtn" type="button">Gerar outro</button>
+              </div>
+              <div class="waiting" id="waiting">
+                <span class="spinner" id="waitSpinner"></span>
+                <div class="waiting-text">
+                  <strong id="waitTitle">Aguardando aprovação</strong>
+                  <small id="waitSub">O link expira em <span id="countdown">10:00</span></small>
+                </div>
+                <span class="waiting-mark hidden" id="waitSuccess" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.2 4.2L19 7" /></svg>
+                </span>
+              </div>
+            </div>
+
+            <div class="divider"><span>ou</span></div>
+
+            <details class="fallback">
+              <summary>
+                <span class="summary-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 15 15 9" /><path d="M7 17H5.5A3.5 3.5 0 0 1 2 13.5v0A3.5 3.5 0 0 1 5.5 10H8" /><path d="M17 7h1.5A3.5 3.5 0 0 1 22 10.5v0A3.5 3.5 0 0 1 18.5 14H16" /></svg>
+                </span>
+                Colar retorno do navegador
+                <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+              </summary>
+              <p class="fallback-text">
+                Se o proxy estiver em outra máquina, copie a URL final (a que contém
+                <code>?code=</code>) e cole aqui.
+              </p>
+              <div class="field">
+                <input id="callbackInput" placeholder="http://127.0.0.1:…/auth-callback?code=… ou só o code" autocomplete="off" />
+                <button class="btn btn-secondary" id="completeBtn" type="button">Concluir</button>
+              </div>
+            </details>
+
+            <details class="fallback">
+              <summary>
+                <span class="summary-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="3.5" /><path d="m10.5 12.5 8-8" /><path d="m15 6 2.5 2.5" /><path d="m17.5 3.5 3 3" /></svg>
+                </span>
+                Já tenho uma API key
+                <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+              </summary>
+              <p class="fallback-text">
+                A chave é validada na DeepAI e criptografada antes de tocar o disco.
+              </p>
+              <div class="field">
+                <input id="apiKeyInput" type="password" placeholder="Cole a Api-Key da DeepAI" autocomplete="off" spellcheck="false" />
+                <button class="btn btn-secondary" id="importBtn" type="button">Adicionar</button>
+              </div>
+            </details>
+          </section>
+          <section class="glass card accounts-card">
+          <div class="card-head">
+            <div>
+              <span class="card-kicker">Contas</span>
+              <h2>Contas conectadas</h2>
+            </div>
+            <span class="count-badge" id="accountCount">0</span>
+          </div>
+          <div class="accounts-grid" id="accountsGrid"></div>
+          <div class="empty" id="emptyState">
+            <div class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 32 32" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="16" r="12" opacity=".45" /><path d="M16 10v12M10 16h12" /></svg>
+            </div>
+            <strong>Nenhuma conta ainda</strong>
+            <span>Gere o primeiro link de login para começar.</span>
+          </div>
+        </section>
+        </section>
+
+        <section class="tab-view hidden" id="view-panel" data-view="panel">
+          <section class="hero hero-compact">
+            <div class="eyebrow"><span class="spark"></span> Painel</div>
+            <h1>Tudo que passa pelo <span class="grad">proxy</span>.</h1>
+            <p>Requisições, latência, tokens, cache e custo estimado em tempo real.</p>
+          </section>
+
+          <section class="metrics" aria-label="Resumo de uso do proxy">
+            <div class="metric glass">
+              <span class="metric-label">Requisições</span>
+              <strong id="metricRequests">0</strong>
+              <span class="metric-hint" id="metricRequestsHint">nenhuma ainda</span>
+            </div>
+            <div class="metric glass">
+              <span class="metric-label">Sucesso</span>
+              <strong id="metricSuccess">—</strong>
+              <span class="metric-hint" id="metricSuccessHint">sem dados</span>
+            </div>
+            <div class="metric glass">
+              <span class="metric-label">Latência média</span>
+              <strong id="metricLatency">—</strong>
+              <span class="metric-hint" id="metricLatencyHint">sem dados</span>
+            </div>
+            <div class="metric glass">
+              <span class="metric-label">Tokens</span>
+              <strong id="metricTokens">0</strong>
+              <span class="metric-hint" id="metricTokensHint">in 0 · out 0</span>
+            </div>
+            <div class="metric glass">
+              <span class="metric-label">Cache</span>
+              <strong id="metricCache">—</strong>
+              <span class="metric-hint" id="metricCacheHint">sem dados</span>
+            </div>
+            <div class="metric glass">
+              <span class="metric-label">Theos</span>
+              <strong id="metricTheos">—</strong>
+              <span class="metric-hint" id="metricTheosHint">sem leitura de saldo</span>
+            </div>
+          </section>
+
+          <section class="charts-grid" aria-label="Gráficos de uso">
+            <article class="glass card chart-card">
+              <div class="card-head chart-head">
+                <div>
+                  <span class="card-kicker">Volume</span>
+                  <h2>Requisições por hora</h2>
+                </div>
+                <span class="chart-note" id="chartRequestsNote">últimas 12h</span>
+              </div>
+              <div class="chart-body" id="chartRequests"></div>
+            </article>
+            <article class="glass card chart-card">
+              <div class="card-head chart-head">
+                <div>
+                  <span class="card-kicker">Desempenho</span>
+                  <h2>Latência recente</h2>
+                </div>
+                <span class="chart-note" id="chartLatencyNote">últimas 30</span>
+              </div>
+              <div class="chart-body" id="chartLatency"></div>
+            </article>
+            <article class="glass card chart-card chart-wide">
+              <div class="card-head chart-head">
+                <div>
+                  <span class="card-kicker">Distribuição</span>
+                  <h2>Modelos mais usados</h2>
+                </div>
+                <span class="chart-note" id="chartModelsNote">—</span>
+              </div>
+              <div class="chart-body chart-body-bars" id="chartModels"></div>
+            </article>
+          </section>
+
+          <section class="glass card activity-card">
+          <div class="card-head">
+            <div>
+              <span class="card-kicker">Telemetria</span>
+              <h2>Atividade recente</h2>
+            </div>
+            <div class="activity-actions">
+              <span class="telemetry-updated" id="telemetryUpdated">—</span>
+              <button class="btn btn-ghost btn-sm" id="refreshTelemetry" type="button">Atualizar</button>
+              <button class="btn btn-danger-ghost btn-sm" id="clearTelemetry" type="button">Limpar</button>
+            </div>
+          </div>
+          <div class="activity-table-wrap" id="activityWrap">
+            <table class="activity-table">
+              <thead>
+                <tr>
+                  <th>Hora</th>
+                  <th>Conta</th>
+                  <th>Modelo</th>
+                  <th>Rota</th>
+                  <th>Status</th>
+                  <th>Latência</th>
+                  <th>Tokens</th>
+                  <th>Cache</th>
+                  <th>Theos</th>
+                </tr>
+              </thead>
+              <tbody id="activityBody"></tbody>
+            </table>
+          </div>
+          <div class="empty hidden" id="activityEmpty">
+            <div class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 32 32" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 24V12M16 24V8M26 24v-6" opacity=".7" /><path d="M4 26h24" opacity=".45" /></svg>
+            </div>
+            <strong>Nenhuma requisição ainda</strong>
+            <span>Use o proxy em um cliente OpenAI para ver a telemetria aqui.</span>
+          </div>
+        </section>
+
+        <section class="glass card conversation-card" aria-label="Conversas monitoradas pelo proxy">
+          <div class="card-head">
+            <div>
+              <span class="card-kicker">Memória do proxy</span>
+              <h2>Conversas monitoradas</h2>
+            </div>
+            <div class="activity-actions">
+              <span class="telemetry-updated" id="conversationsUpdated">—</span>
+              <button class="btn btn-danger-ghost btn-sm" id="clearConversations" type="button">Limpar conversas</button>
+            </div>
+          </div>
+          <div class="conversation-stats">
+            <div><span>Sessões</span><strong id="conversationSessions">0</strong></div>
+            <div><span>Mensagens</span><strong id="conversationMessages">0</strong></div>
+            <div><span>Contexto restaurado</span><strong id="conversationRestored">0</strong></div>
+            <div><span>Espaço</span><strong id="conversationBytes">0 B</strong></div>
+          </div>
+          <p class="conversation-note">O proxy reconhece a conversa pelo histórico, restaura o que o cliente compactou e usa um id estável mesmo com troca de conta ou modelo. O conteúdo fica criptografado em <code>data/conversations.json</code>.</p>
+          <div class="conversation-list" id="conversationList"></div>
+          <div class="empty hidden" id="conversationsEmpty">
+            <strong>Nenhuma conversa registrada</strong>
+            <span>O primeiro request de chat cria uma sessão automaticamente.</span>
+          </div>
+        </section>
+        </section>
+
+        <section class="tab-view hidden" id="view-models" data-view="models">
+          <section class="hero hero-compact">
+            <div class="eyebrow"><span class="spark"></span> Catálogo</div>
+            <h1>Modelos <span class="grad">disponíveis</span>.</h1>
+            <p>Grátis, pagos e premier direto do catálogo da DeepAI, com atualização manual.</p>
+          </section>
+
+          <section class="glass card models-card">
+            <div class="card-head">
+              <div>
+                <span class="card-kicker">DeepAI</span>
+                <h2>Catálogo de modelos</h2>
+              </div>
+              <div class="models-actions">
+                <span class="telemetry-updated" id="modelsUpdated">—</span>
+                <button class="btn btn-ghost btn-sm" id="refreshModels" type="button">Atualizar catálogo</button>
+              </div>
+            </div>
+            <div class="model-toolbar">
+              <div class="filter-chips" id="modelFilters" role="group" aria-label="Filtrar modelos">
+                <button class="chip active" data-filter="all" type="button">Todos <span id="countAll">0</span></button>
+                <button class="chip" data-filter="free" type="button">Grátis <span id="countFree">0</span></button>
+                <button class="chip" data-filter="paid" type="button">Pagos <span id="countPaid">0</span></button>
+                <button class="chip" data-filter="premier" type="button">Premier <span id="countPremier">0</span></button>
+              </div>
+              <div class="model-tools">
+                <select class="select-input" id="modelProvider" aria-label="Filtrar por fabricante">
+                  <option value="all">Todos os fabricantes</option>
+                </select>
+                <select class="select-input" id="modelSort" aria-label="Ordenar modelos">
+                  <option value="default">Ordem do catálogo</option>
+                  <option value="name">Nome A–Z</option>
+                  <option value="price-asc">Menor preço</option>
+                  <option value="price-desc">Maior preço</option>
+                  <option value="context-desc">Maior contexto</option>
+                </select>
+                <input class="search-input" id="modelSearch" placeholder="Buscar nome ou id…" autocomplete="off" />
+              </div>
+            </div>
+            <p class="models-summary" id="modelsSummary">Conecte uma conta para carregar o catálogo.</p>
+            <div class="models-grid" id="modelsGrid"></div>
+            <div class="empty hidden" id="modelsEmpty">
+              <div class="empty-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 8.5 4.7L12 12.4 3.5 7.7 12 3Z"/><path d="m4 12 8 4.5 8-4.5"/><path d="m4 16.3 8 4.5 8-4.5"/></svg>
+              </div>
+              <strong>Nenhum modelo neste filtro</strong>
+              <span>Ajuste a busca ou atualize o catálogo.</span>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-view hidden" id="view-access" data-view="access">
+          <section class="hero hero-compact">
+            <div class="eyebrow"><span class="spark"></span> Acesso</div>
+            <h1>Plugue no seu <span class="grad">cliente</span>.</h1>
+            <p>Base URL e token do proxy para OpenCode, Hermes, DeepSeek, Arnis ou qualquer SDK OpenAI.</p>
+          </section>
+
+          <div class="access-layout">
+            <aside class="glass card access-card">
+            <div class="card-head">
+              <div>
+                <span class="card-kicker">API</span>
+                <h2>Acesso do proxy</h2>
+              </div>
+              <span class="badge-soft badge-green">OpenAI-compatible</span>
+            </div>
+
+            <label for="baseUrl">Base URL</label>
+            <div class="copy-field">
+              <input id="baseUrl" readonly />
+              <button class="copy-btn" data-copy-target="baseUrl" type="button" title="Copiar base URL">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8" /></svg>
+                <span>Copiar</span>
+              </button>
+            </div>
+
+            <label for="proxyToken">Token do proxy</label>
+            <div class="copy-field">
+              <input id="proxyToken" type="password" readonly />
+              <button class="icon-btn inline-icon" id="revealBtn" type="button" title="Mostrar token" aria-label="Mostrar token">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+              </button>
+              <button class="copy-btn" data-copy-target="proxyToken" type="button" title="Copiar token">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8" /></svg>
+                <span>Copiar</span>
+              </button>
+            </div>
+
+            <div class="code-block">
+              <div class="code-head">
+                <span>curl</span>
+                <button class="copy-btn subtle" id="copySnippet" type="button">Copiar</button>
+              </div>
+              <pre id="snippet"><code>curl http://127.0.0.1:8790/v1/chat/completions \
+  -H "Authorization: Bearer $DEEPAI_PROXY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepai/glm-5.3-flash",
+    "messages": [{ "role": "user", "content": "Olá!" }]
+  }'</code></pre>
+            </div>
+
+            <div class="access-foot">
+              <span class="mini-note">Use também em qualquer SDK OpenAI.</span>
+              <button class="btn btn-danger-ghost btn-sm" id="rotateBtn" type="button">Rotacionar token</button>
+            </div>
+          </aside>
+            <section class="glass card clients-card">
+              <div class="card-head">
+                <div>
+                  <span class="card-kicker">Clientes</span>
+                  <h2>Chat completions</h2>
+                </div>
+                <span class="badge-soft badge-green">OpenAI</span>
+              </div>
+              <div class="client-list">
+                <div class="client-item"><strong>OpenCode</strong><span>provider openai-compatible</span></div>
+                <div class="client-item"><strong>Hermes</strong><span>base URL + bearer token</span></div>
+                <div class="client-item"><strong>DeepSeek</strong><span>chat completions</span></div>
+                <div class="client-item"><strong>Arnis</strong><span>chat completions</span></div>
+                <div class="client-item"><strong>SDK OpenAI</strong><span>baseURL /v1</span></div>
+                <div class="client-item"><strong>OpenWebUI · Voz</strong><span>POST /v1/audio/transcriptions</span></div>
+              </div>
+              <div class="code-block">
+                <div class="code-head">
+                  <span>config base</span>
+                  <button class="copy-btn subtle" id="copyClientSnippet" type="button">Copiar</button>
+                </div>
+                <pre id="clientSnippet"><code>baseURL: "http://127.0.0.1:8790/v1"
+apiKey:  "$DEEPAI_PROXY_TOKEN"
+model:   "deepai/glm-5.3-flash"</code></pre>
+              </div>
+              <p class="mini-note client-note">O proxy aceita o id com ou sem o prefixo <code>deepai/</code>. O cache de contexto é ativado automaticamente por conversa. Áudio de voz usa <code>webm/opus</code> ou <code>mp4</code>, até 8 MB.</p>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <footer class="foot">
+        <span>DeepAI Proxy · credenciais criptografadas em <code>data/</code></span>
+        <span class="foot-dot"></span>
+        <span>Escuta apenas em <code>127.0.0.1</code></span>
+      </footer>
+    </div>
+
+    <div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gateTitle">
+      <div class="gate-card glass">
+        <div class="gate-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5" /><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7" /></svg>
+        </div>
+        <span class="card-kicker" id="gateKicker">Primeiro acesso</span>
+        <h2 id="gateTitle">Crie sua senha</h2>
+        <p id="gateSubtitle">Proteja o painel e as credenciais das contas com uma senha de administrador.</p>
+        <form id="gateForm" autocomplete="off">
+          <div id="setupFields" class="hidden">
+            <label for="setupPassword">Senha de administrador</label>
+            <div class="copy-field password-field">
+              <input id="setupPassword" type="password" minlength="8" maxlength="200" placeholder="Mínimo de 8 caracteres" autocomplete="new-password" />
+              <button class="icon-btn inline-icon password-toggle" data-target="setupPassword" type="button" title="Mostrar senha" aria-label="Mostrar senha">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+              </button>
+            </div>
+            <div class="password-tools">
+              <button class="btn btn-ghost btn-sm" id="generatePassword" type="button">Gerar senha forte</button>
+              <button class="btn btn-ghost btn-sm hidden" id="copyGenerated" type="button">Copiar senha</button>
+            </div>
+            <div class="strength" id="strength" aria-hidden="true"><i></i><i></i><i></i></div>
+            <label for="setupConfirm">Confirmar senha</label>
+            <div class="copy-field password-field">
+              <input id="setupConfirm" type="password" minlength="8" maxlength="200" placeholder="Repita a senha" autocomplete="new-password" />
+              <button class="icon-btn inline-icon password-toggle" data-target="setupConfirm" type="button" title="Mostrar senha" aria-label="Mostrar senha">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+              </button>
+            </div>
+            <p class="field-note">Guarde esta senha. Ela protege o painel e as credenciais das contas.</p>
+          </div>
+          <div id="loginFields" class="hidden">
+            <label for="loginPassword">Senha de administrador</label>
+            <div class="copy-field password-field">
+              <input id="loginPassword" type="password" placeholder="Sua senha" autocomplete="current-password" />
+              <button class="icon-btn inline-icon password-toggle" data-target="loginPassword" type="button" title="Mostrar senha" aria-label="Mostrar senha">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+              </button>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="gateSubmit" type="submit">Criar senha e entrar</button>
+        </form>
+        <p class="gate-error" id="gateError" role="alert"></p>
+        <p class="gate-hint hidden" id="gateForgot">Esqueceu a senha? Pare o proxy, rode <code>npm run reset-password</code> e abra o painel de novo.</p>
+      </div>
+    </div>
+
+    <dialog class="modal glass" id="confirmDialog">
+      <h2 id="confirmTitle">Confirmar</h2>
+      <p id="confirmMessage"></p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="confirmCancel" type="button">Cancelar</button>
+        <button class="btn btn-danger" id="confirmOk" type="button">Confirmar</button>
+      </div>
+    </dialog>
+
+    <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+  </body>
+</html>
