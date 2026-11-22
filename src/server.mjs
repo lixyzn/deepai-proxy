@@ -12,7 +12,11 @@ import { LoginManager } from "./auth.mjs";
 import { normalizeChatPayload } from "./compat.mjs";
 import { modelMeta } from "./model-meta.mjs";
 import { applyCacheIdentity } from "./context.mjs";
-import { ConversationStore, compactMessages } from "./conversations.mjs";
+import {
+  ConversationStore,
+  estimatePayloadOverheadTokens,
+  prepareUpstreamMessages,
+} from "./conversations.mjs";
 import { Telemetry } from "./telemetry.mjs";
 import {
   checkIn,
@@ -62,6 +66,7 @@ const execFile = promisify(execFileCb);
 const UPDATE_REPO = process.env.DEEPAI_UPDATE_REPO || "lixyzn/deepai-proxy";
 const UPDATE_BRANCH = process.env.DEEPAI_UPDATE_BRANCH || "main";
 const UPDATE_CHECK_TTL_MS = 30 * 60 * 1000;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
 let updateCache = { checkedAt: 0, data: null, error: null, promise: null };
 let updateApplying = false;
 
@@ -214,61 +219,89 @@ async function applyUpdate() {
     try {
       await runGit(["rev-parse", "--is-inside-work-tree"]);
     } catch {
-      throw new Error(
-        "Este diretório não é um repositório git. Atualize manualmente pelo repositório.",
-      );
+      throw new Error("O proxy não está rodando dentro de um repositório git. Atualize manualmente com git pull/atualizador do seu ambiente.");
     }
 
-    await runGit(["fetch", "origin", UPDATE_BRANCH]);
-    const { stdout: behindRaw } = await runGit([
-      "rev-list",
-      "--count",
-      `HEAD..origin/${UPDATE_BRANCH}`,
-    ]);
-    const behind = Number(String(behindRaw || "").trim());
-    if (!Number.isFinite(behind) || behind <= 0) {
-      updateCache.checkedAt = 0;
-      return { ok: true, updated: false, message: "O proxy já está na versão mais recente." };
+    try {
+      await runGit(["diff", "--quiet"]);
+      await runGit(["diff", "--cached", "--quiet"]);
+    } catch {
+      throw new Error("Há alterações locais no repositório do proxy. Faça commit/stash ou atualize manualmente antes de usar o botão de atualizar.");
     }
 
-    const { stdout: statusRaw } = await runGit(["status", "--porcelain"]);
-    const dirty = String(statusRaw || "")
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter(Boolean)
-      .filter((line) => !line.startsWith("?? data/") && line !== "?? data");
-    if (dirty.length > 0) {
-      throw new Error(
-        "Existem alterações locais no repositório. Faça commit ou stash antes de atualizar automaticamente.",
-      );
+    try {
+      await runGit(["fetch", "--tags", "origin", UPDATE_BRANCH, "--prune", "--depth", "50"]);
+    } catch {
+      try {
+        await runGit(["fetch", "origin", UPDATE_BRANCH]);
+      } catch (e2) {
+        throw new Error(`Falha ao buscar atualizações do remote origin: ${String(e2?.message || e2)}. Verifique internet/acesso ao GitHub.`);
+      }
     }
 
-    const { stdout: beforeHead } = await runGit(["rev-parse", "HEAD"]);
-    await runGit(["pull", "--ff-only", "origin", UPDATE_BRANCH]);
-    const { stdout: afterHead } = await runGit(["rev-parse", "HEAD"]);
+    const info = await fetchLatestUpdate();
+    const current = getCurrentVersion();
 
-    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-    await execFile(npmCmd, ["install"], {
-      cwd: ROOT,
-      timeout: 240_000,
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
-      env: process.env,
-    });
+    if (isVersionOutdated(current, info.latestVersion)) {
+      const ref = info.releaseTag || `v${info.latestVersion}`;
+      try {
+        await runGit(["checkout", ref, "--detach"]);
+      } catch (e) {
+        const msg = String(e?.message || e || "");
+        if (msg.includes("not found") || msg.toLowerCase().includes("pathspec") || msg.includes("did not match")) {
+          throw new Error(`Tag '${ref}' não encontrada após fetch. Verifique a release e DEEPAI_UPDATE_REPO.`);
+        }
+        throw new Error(`Falha ao fazer checkout da tag '${ref}': ${msg}`);
+      }
+    } else {
+      const branchExists = await gitRefExists(`refs/heads/${UPDATE_BRANCH}`);
+      if (!branchExists) {
+        throw new Error(`Branch '${UPDATE_BRANCH}' não existe localmente no checkout atual.`);
+      }
+      try {
+        await runGit(["checkout", UPDATE_BRANCH]);
+      } catch (e) {
+        throw new Error(`Não foi possível alternar para a branch '${UPDATE_BRANCH}': ${String(e?.message || e)}`);
+      }
+      try {
+        await runGit(["pull", "--ff-only", "origin", UPDATE_BRANCH]);
+      } catch (e) {
+        const msg = String(e?.message || e || "");
+        throw new Error(`git pull --ff-only falhou: ${msg}. Faça git pull manual na pasta do projeto.`);
+      }
+    }
 
-    updateCache.checkedAt = 0;
+    try {
+      await runCommandInProxyRoot(getInstallCommand());
+    } catch (e) {
+      throw new Error(`Arquivos atualizados, mas falhou ao instalar dependências: ${String(e?.message || e)}`);
+    }
+
+    updateCache = { checkedAt: 0, data: null, error: null, promise: null };
+    const startCommand = buildStartCommand();
+
     return {
       ok: true,
-      updated: String(beforeHead).trim() !== String(afterHead).trim(),
-      previousHead: String(beforeHead).trim(),
-      currentHead: String(afterHead).trim(),
-      message: "Atualização baixada. Reiniciando o servidor...",
+      currentVersion: current,
+      latestVersion: normalizeVersion(info.latestVersion),
+      releaseUrl: info.releaseUrl,
+      releaseTag: info.releaseTag || null,
+      notes: "",
+      publishedAt: info.publishedAt || null,
+      installedAt: info.installedAt || new Date().toISOString(),
+      releaseName: info.releaseName || null,
+      updated: true,
+      restartRequired: true,
+      nextStep: "Reinicie o proxy na pasta do projeto para usar a versão atualizada.",
+      startCommand,
+      hint: "Se o processo foi iniciado por pnpm start/npm start/arquivo .bat, pare e suba de novo nesse mesmo contexto.",
     };
+  } catch (e) {
+    throw e;
   } finally {
     updateApplying = false;
   }
 }
-
 function scheduleRestart(delayMs = 1500) {
   setTimeout(() => {
     server.close(() => {
@@ -720,21 +753,95 @@ function resolveModelId(account, value) {
 }
 
 const COMPACTION_RESERVE_TOKENS = 16384;
-const COMPACTION_KEEP_RECENT_TOKENS = 20000;
+const COMPACTION_KEEP_RECENT_TOKENS = 14000;
 const DEFAULT_CONTEXT_WINDOW = 128000;
+// A DeepAI impõe um teto efetivo silencioso (~36.5k prompt_tokens) nos modelos
+// gratuitos mesmo anunciando 320k no /models. Quando excedido com tool_calls, o
+// servidor da DeepAI descarta o histórico intermediário silenciosamente.
+const ENV_UPSTREAM_CONTEXT_CAP = Number(process.env.DEEPAI_UPSTREAM_CONTEXT_CAP);
+const DEFAULT_FREE_INPUT_CAP =
+  Number.isFinite(ENV_UPSTREAM_CONTEXT_CAP) && ENV_UPSTREAM_CONTEXT_CAP >= 0
+    ? ENV_UPSTREAM_CONTEXT_CAP
+    : 33000;
+const observedModelInputCap = new Map();
+
+function findCachedModelEntry(accountId, model) {
+  if (!model) return null;
+  const lower = String(model).toLowerCase();
+  const match = (entry) =>
+    entry &&
+    (entry.id === `deepai/${model}` ||
+      entry.id === model ||
+      entry.slug === model ||
+      String(entry.id ?? "").toLowerCase() === `deepai/${lower}` ||
+      String(entry.slug ?? "").toLowerCase() === lower);
+
+  const primary = modelCache.get(accountId);
+  if (primary?.data?.data) {
+    const found = primary.data.data.find(match);
+    if (found) return found;
+  }
+  for (const cached of modelCache.values()) {
+    const found = cached?.data?.data?.find(match);
+    if (found) return found;
+  }
+  return null;
+}
 
 function contextWindowFor(accountId, model) {
-  const cached = modelCache.get(accountId);
-  if (!cached || !model) return DEFAULT_CONTEXT_WINDOW;
-  const entry = cached.data.data.find(
-    (item) =>
-      item.id === `deepai/${model}` ||
-      item.id === model ||
-      item.slug === model,
-  );
+  const entry = findCachedModelEntry(accountId, model);
   const cw = entry?.context_window;
   if (typeof cw === "number" && Number.isFinite(cw) && cw > 0) return cw;
   return DEFAULT_CONTEXT_WINDOW;
+}
+
+function maxOutputTokensFor(accountId, model) {
+  const entry = findCachedModelEntry(accountId, model);
+  const out = entry?.max_output_tokens;
+  if (typeof out === "number" && Number.isFinite(out) && out > 0) return out;
+  return null;
+}
+
+function effectiveInputCapFor(accountId, model) {
+  if (ENV_UPSTREAM_CONTEXT_CAP === 0) return null;
+  if (Number.isFinite(ENV_UPSTREAM_CONTEXT_CAP) && ENV_UPSTREAM_CONTEXT_CAP > 0) {
+    return ENV_UPSTREAM_CONTEXT_CAP;
+  }
+  const key = String(model ?? "").toLowerCase();
+  const observed = key ? observedModelInputCap.get(key) : null;
+  const entry = findCachedModelEntry(accountId, model);
+  const isFree = entry ? entry.free === true || entry.tier === "free" : true;
+  const baseCap = isFree ? DEFAULT_FREE_INPUT_CAP : null;
+  if (observed && baseCap) return Math.min(observed, baseCap);
+  return observed ?? baseCap;
+}
+
+function observeUpstreamInputTokens(model, sentEstTokens, actualInputTokens) {
+  if (
+    !model ||
+    !Number.isFinite(sentEstTokens) ||
+    !Number.isFinite(actualInputTokens) ||
+    sentEstTokens < 20000 ||
+    actualInputTokens <= 0
+  ) {
+    return;
+  }
+  // Se o upstream leu muito menos tokens do que enviamos (< 65%), houve
+  // truncamento silencioso no servidor da DeepAI: calibra o teto deste modelo.
+  if (actualInputTokens < sentEstTokens * 0.65) {
+    const key = String(model).toLowerCase();
+    const prev = observedModelInputCap.get(key) ?? sentEstTokens;
+    const calibrated =
+      actualInputTokens >= 18000
+        ? Math.max(16000, Math.floor(actualInputTokens * 0.9))
+        : Math.max(16000, Math.floor(Math.min(prev, sentEstTokens) * 0.8));
+    if (calibrated < prev || !observedModelInputCap.has(key)) {
+      observedModelInputCap.set(key, calibrated);
+      console.warn(
+        `[context] truncamento silencioso detectado em ${model}: enviado ~${sentEstTokens}, upstream leu ${actualInputTokens}. Novo teto efetivo: ${calibrated} tokens.`,
+      );
+    }
+  }
 }
 
 function pricingFor(accountId, model) {
@@ -842,7 +949,7 @@ function createResponseScanner(contentType) {
           tail = tail.slice(index + 1);
           consumeLine(line);
         }
-        if (tail.length > 262144) tail = tail.slice(-4096);
+        if (tail.length > maxBuffer) tail = tail.slice(-4096);
       } else if (tail.length > maxBuffer) {
         overflow = true;
         tail = "";
@@ -878,14 +985,29 @@ function collectChunkText(value) {
 
 function mergeToolCall(map, part) {
   if (!part || typeof part !== "object") return;
-  const index = Number.isInteger(part.index) ? part.index : 0;
+  let index;
+  if (Number.isInteger(part.index)) {
+    index = part.index;
+  } else if (typeof part.id === "string" && part.id) {
+    const existing = [...map.entries()].find(([, call]) => call.id === part.id);
+    index = existing ? existing[0] : map.size;
+  } else {
+    index = map.size > 0 ? map.size - 1 : 0;
+  }
   const current =
     map.get(index) ?? { id: "", type: "function", function: { name: "", arguments: "" } };
   if (typeof part.id === "string" && part.id) current.id = part.id;
   if (typeof part.type === "string" && part.type) current.type = part.type;
   if (part.function && typeof part.function === "object") {
     if (typeof part.function.name === "string" && part.function.name) {
-      current.function.name = part.function.name;
+      if (!current.function.name) {
+        current.function.name = part.function.name;
+      } else if (
+        current.function.name !== part.function.name &&
+        !part.id
+      ) {
+        current.function.name += part.function.name;
+      }
     }
     if (typeof part.function.arguments === "string") {
       current.function.arguments += part.function.arguments;
@@ -1062,6 +1184,9 @@ async function collectChatCompletionStream(upstream, res, meta, fallbackModel) {
       );
     }
   }
+  if (upstream.status < 400 && parsedUsage?.inputTokens > 0) {
+    observeUpstreamInputTokens(meta.model, meta.sentEstTokens, parsedUsage.inputTokens);
+  }
   telemetry.record({
     ...meta,
     status: upstream.status,
@@ -1148,7 +1273,7 @@ function createAssistantCapture(contentType) {
           tail = tail.slice(index + 1);
           consumeLine(line);
         }
-        if (tail.length > 262144) tail = tail.slice(-4096);
+        if (tail.length > maxBuffer) tail = tail.slice(-4096);
       } else if (isJson) {
         tail += Buffer.from(chunk).toString("utf8");
         if (tail.length > maxBuffer) {
@@ -1223,6 +1348,9 @@ async function pipeUpstream(upstream, res, meta) {
           );
         }
       }
+    }
+    if (upstream.status < 400 && scanned.usage?.inputTokens > 0) {
+      observeUpstreamInputTokens(meta.model, meta.sentEstTokens, scanned.usage.inputTokens);
     }
     telemetry.record({
       ...meta,
@@ -1454,6 +1582,10 @@ async function handleProxy(req, res, url) {
       return;
     }
 
+    if (!modelCache.has(account.id)) {
+      await modelsFor(account).catch(() => null);
+    }
+
     if (endpoint === "chat/completions") {
       payload = normalizeChatPayload(payload, (value) =>
         resolveModelId(account, value),
@@ -1499,17 +1631,40 @@ async function handleProxy(req, res, url) {
       conversation = { sessionId: identity.key, restored: 0 };
     }
 
-    // Compactação estilo Pi SDK: evita overflow de contexto e preserva prefixo estável
-    const cw = contextWindowFor(account.id, payload.model || model);
-    const compactOpts = {
+    // Prepara o histórico para o upstream respeitando o teto efetivo real da DeepAI:
+    // 1) remove reasoning antigo; 2) poda outputs de tool antigos preservando todos os turnos;
+    // 3) só descarta turnos antigos em último caso. O ledger completo segue intacto.
+    const resolvedModel = payload.model || model;
+    const cw = contextWindowFor(account.id, resolvedModel);
+    const modelMaxOut = maxOutputTokensFor(account.id, resolvedModel);
+    const requestedMaxOut =
+      typeof payload?.max_tokens === "number" && Number.isFinite(payload.max_tokens)
+        ? payload.max_tokens
+        : typeof payload?.max_output_tokens === "number" &&
+            Number.isFinite(payload.max_output_tokens)
+          ? payload.max_output_tokens
+          : 0;
+    const reserveTokens = Math.min(
+      Math.floor(cw * 0.4),
+      Math.max(COMPACTION_RESERVE_TOKENS, requestedMaxOut || modelMaxOut || 0),
+    );
+    const prepareOpts = {
       contextWindow: cw,
-      reserveTokens: COMPACTION_RESERVE_TOKENS,
+      reserveTokens,
+      effectiveInputCap: effectiveInputCapFor(account.id, resolvedModel),
       keepRecentTokens: COMPACTION_KEEP_RECENT_TOKENS,
+      keepRecentTools: 3,
+      extraTokens: estimatePayloadOverheadTokens(payload),
     };
+    let sentEstTokens = null;
     if (Array.isArray(payload.messages)) {
-      payload = { ...payload, messages: compactMessages(payload.messages, compactOpts) };
+      const prepared = prepareUpstreamMessages(payload.messages, prepareOpts);
+      payload = { ...payload, messages: prepared.messages };
+      sentEstTokens = prepared.estimatedTokens;
     } else if (Array.isArray(payload.input)) {
-      payload = { ...payload, input: compactMessages(payload.input, compactOpts) };
+      const prepared = prepareUpstreamMessages(payload.input, prepareOpts);
+      payload = { ...payload, input: prepared.messages };
+      sentEstTokens = prepared.estimatedTokens;
     }
 
     const controller = new AbortController();
@@ -1669,6 +1824,7 @@ async function handleProxy(req, res, url) {
           endpoint,
           model,
           sessionId: conversation.sessionId,
+          sentEstTokens,
           startedAt,
           signal: controller.signal,
           theos: upstream.status < 400 ? theos : null,
@@ -1708,6 +1864,7 @@ async function handleProxy(req, res, url) {
       endpoint,
       model,
       sessionId: conversation.sessionId,
+      sentEstTokens,
       startedAt,
       signal: controller.signal,
       theos: upstream.status < 400 ? theos : null,
