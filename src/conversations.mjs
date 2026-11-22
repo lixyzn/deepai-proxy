@@ -239,28 +239,135 @@ function isSystem(message) {
   return message?.role === "system" || message?.role === "developer";
 }
 
+function estimateStringTokens(value) {
+  return typeof value === "string" && value.length > 0
+    ? Math.ceil(value.length / 4)
+    : 0;
+}
+
+function estimateValueTokens(value) {
+  if (typeof value === "string") return estimateStringTokens(value);
+  if (value === null || value === undefined) return 0;
+  try {
+    return Math.ceil(JSON.stringify(value).length / 4);
+  } catch {
+    return 0;
+  }
+}
+
+export function estimatePayloadOverheadTokens(payload) {
+  if (!payload || typeof payload !== "object") return 0;
+  let total = 0;
+  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+    total += estimateValueTokens(payload.tools);
+  }
+  if (Array.isArray(payload.functions) && payload.functions.length > 0) {
+    total += estimateValueTokens(payload.functions);
+  }
+  if (payload.tool_choice !== undefined) {
+    total += estimateValueTokens(payload.tool_choice);
+  }
+  if (typeof payload.instructions === "string") {
+    total += estimateStringTokens(payload.instructions);
+  }
+  if (payload.response_format !== undefined) {
+    total += estimateValueTokens(payload.response_format);
+  }
+  return total;
+}
+
 function estimateTokens(messages) {
   let total = 0;
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") continue;
+    total += 4;
     const content = msg.content;
     if (typeof content === "string") {
-      total += Math.ceil(content.length / 4);
+      total += estimateStringTokens(content);
     } else if (Array.isArray(content)) {
       for (const part of content) {
-        if (part && typeof part === "object" && typeof part.text === "string") {
-          total += Math.ceil(part.text.length / 4);
+        if (!part || typeof part !== "object") continue;
+        if (typeof part.text === "string") {
+          total += estimateStringTokens(part.text);
+        } else if (typeof part.input_text === "string") {
+          total += estimateStringTokens(part.input_text);
+        } else if (typeof part.output_text === "string") {
+          total += estimateStringTokens(part.output_text);
+        } else if (part.type === "image_url" || part.type === "input_image") {
+          total += 256;
         }
       }
     }
+    total += estimateStringTokens(msg.reasoning_content);
+    total += estimateStringTokens(msg.reasoning);
+    total += estimateStringTokens(msg.name);
+    total += estimateStringTokens(msg.tool_call_id);
     if (Array.isArray(msg.tool_calls)) {
       for (const tc of msg.tool_calls) {
-        const args = tc?.function?.arguments;
-        if (typeof args === "string") total += Math.ceil(args.length / 4);
+        total += 8;
+        total += estimateStringTokens(tc?.id);
+        total += estimateStringTokens(tc?.function?.name);
+        total += estimateStringTokens(tc?.function?.arguments);
       }
+    }
+    if (msg.function_call && typeof msg.function_call === "object") {
+      total += 8;
+      total += estimateStringTokens(msg.function_call.name);
+      total += estimateStringTokens(msg.function_call.arguments);
+    }
+    // Suporte a itens da Responses API (/v1/responses)
+    if (msg.type === "function_call") {
+      total += 8;
+      total += estimateStringTokens(msg.call_id);
+      total += estimateStringTokens(msg.name);
+      total += estimateStringTokens(msg.arguments);
+    } else if (msg.type === "function_call_output") {
+      total += 6;
+      total += estimateStringTokens(msg.call_id);
+      total +=
+        typeof msg.output === "string"
+          ? estimateStringTokens(msg.output)
+          : estimateValueTokens(msg.output);
+    } else if (msg.type === "reasoning" && msg.summary !== undefined) {
+      total += estimateValueTokens(msg.summary);
     }
   }
   return total;
+}
+
+function isToolResultItem(item) {
+  return item?.role === "tool" || item?.type === "function_call_output";
+}
+
+function isToolCallItem(item) {
+  return (
+    (item?.role === "assistant" &&
+      Array.isArray(item.tool_calls) &&
+      item.tool_calls.length > 0) ||
+    item?.type === "function_call"
+  );
+}
+
+function expectedToolCallIds(item) {
+  if (item?.type === "function_call" && typeof item.call_id === "string" && item.call_id) {
+    return [item.call_id];
+  }
+  if (item?.role === "assistant" && Array.isArray(item.tool_calls)) {
+    return item.tool_calls
+      .map((tc) => tc?.id)
+      .filter((id) => typeof id === "string" && id.length > 0);
+  }
+  return [];
+}
+
+function resultToolCallId(item) {
+  if (item?.role === "tool" && typeof item.tool_call_id === "string") {
+    return item.tool_call_id;
+  }
+  if (item?.type === "function_call_output" && typeof item.call_id === "string") {
+    return item.call_id;
+  }
+  return null;
 }
 
 function trimMessages(messages) {
@@ -293,12 +400,15 @@ export function compactMessages(
     reserveTokens = 16384,
     keepRecentTokens = 20000,
     maxTokens,
+    extraTokens = 0,
     lowWatermarkRatio = 0.62,
   } = {},
 ) {
   if (!Array.isArray(messages) || messages.length <= 2) return messages;
 
-  const budget = Math.max(1024, maxTokens ? maxTokens : contextWindow - reserveTokens);
+  const overhead = Number.isFinite(extraTokens) && extraTokens > 0 ? extraTokens : 0;
+  const rawBudget = maxTokens ? maxTokens : contextWindow - reserveTokens;
+  const budget = Math.max(1024, rawBudget - overhead);
   const totalTokens = estimateTokens(messages);
   if (totalTokens <= budget) return messages;
 
@@ -313,7 +423,10 @@ export function compactMessages(
     : 0.62;
   const target = Math.max(
     1024,
-    Math.min(budget - 1024, Math.max(keepRecentTokens, Math.floor(budget * ratio))),
+    Math.min(
+      Math.max(1024, budget - 1024),
+      Math.max(keepRecentTokens, Math.floor(budget * ratio)),
+    ),
   );
   const recentBudget = Math.max(512, target - systemTokens);
 
@@ -327,55 +440,288 @@ export function compactMessages(
     recentTokens += tokens;
   }
 
-  // Não corta no meio de uma sequência de ferramentas.
+  // Não corta no meio de uma sequência de ferramentas (Chat Completions ou Responses API).
   let cutIndex = body.length - recent.length;
-  while (cutIndex > 0 && recent[0]?.role === "tool") {
+  while (cutIndex > 0 && isToolResultItem(recent[0])) {
     cutIndex -= 1;
-    recent.unshift(body[cutIndex]);
-    recentTokens += estimateTokens([body[cutIndex]]);
-  }
-  // Se o corte deixou um assistant com tool_calls sem nenhum resultado, recua.
-  while (cutIndex > 0) {
-    const firstRecent = recent[0];
-    if (
-      firstRecent?.role === "assistant" &&
-      Array.isArray(firstRecent.tool_calls) &&
-      firstRecent.tool_calls.length > 0 &&
-      !recent.slice(1).some((m) => m.role === "tool")
-    ) {
-      cutIndex -= 1;
-      recent.unshift(body[cutIndex]);
-      recentTokens += estimateTokens([body[cutIndex]]);
-      continue;
+    const prev = body[cutIndex];
+    recent.unshift(prev);
+    recentTokens += estimateTokens([prev]);
+    // Se puxamos um function_call (Responses API) que faz parte de um lote,
+    // continua puxando até sair do lote se houver outro function_call imediatamente antes.
+    if (prev?.type === "function_call") {
+      while (cutIndex > 0 && body[cutIndex - 1]?.type === "function_call") {
+        cutIndex -= 1;
+        recent.unshift(body[cutIndex]);
+        recentTokens += estimateTokens([body[cutIndex]]);
+      }
     }
-    break;
   }
 
   const result = [...leadingSystem, ...recent];
 
-  // Remove órfãos óbvios de tool no começo da janela.
+  // Remove resultados de ferramenta órfãos no começo da janela.
   while (
     result.length > leadingSystem.length + 1 &&
-    result[leadingSystem.length]?.role === "tool"
+    isToolResultItem(result[leadingSystem.length])
   ) {
     result.splice(leadingSystem.length, 1);
   }
-  // Remove assistant+tool_calls sem qualquer resultado correspondente no começo.
-  while (result.length > leadingSystem.length) {
+  // Remove chamadas de ferramenta no começo da janela caso seus resultados tenham sido cortados/ausentes.
+  while (result.length > leadingSystem.length + 1) {
     const firstBody = result[leadingSystem.length];
-    if (
-      firstBody?.role === "assistant" &&
-      Array.isArray(firstBody.tool_calls) &&
-      firstBody.tool_calls.length > 0 &&
-      !result.slice(leadingSystem.length + 1).some((m) => m.role === "tool")
-    ) {
+    if (!isToolCallItem(firstBody)) break;
+    const ids = expectedToolCallIds(firstBody);
+    const tail = result.slice(leadingSystem.length + 1);
+    const hasResult =
+      ids.length > 0
+        ? ids.every((id) => tail.some((m) => resultToolCallId(m) === id))
+        : tail.some(isToolResultItem);
+    if (!hasResult) {
       result.splice(leadingSystem.length, 1);
+      // Também limpa eventuais resultados parciais ligados à chamada removida.
+      while (
+        result.length > leadingSystem.length + 1 &&
+        isToolResultItem(result[leadingSystem.length])
+      ) {
+        result.splice(leadingSystem.length, 1);
+      }
       continue;
     }
     break;
   }
 
   return result;
+}
+
+const UPSTREAM_TOKEN_SAFETY = 1.22;
+
+function stripOldReasoning(messages) {
+  let stripped = 0;
+  const out = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+    if (msg.type === "reasoning") {
+      stripped += 1;
+      continue;
+    }
+    if (
+      msg.role === "assistant" &&
+      ("reasoning" in msg ||
+        "reasoning_content" in msg ||
+        "reasoning_details" in msg)
+    ) {
+      const copy = { ...msg };
+      delete copy.reasoning;
+      delete copy.reasoning_content;
+      delete copy.reasoning_details;
+      stripped += 1;
+      out.push(copy);
+      continue;
+    }
+    out.push(msg);
+  }
+  return { messages: out, stripped };
+}
+
+function summarizeToolText(text, maxHead = 260, maxTail = 0) {
+  if (typeof text !== "string") return text;
+  const trimmed = text.trim();
+  const threshold = maxTail > 0 ? maxHead + maxTail + 160 : maxHead + 240;
+  if (trimmed.length <= threshold) return text;
+
+  const head = trimmed.slice(0, maxHead).trimEnd();
+  if (maxTail > 0) {
+    const tail = trimmed.slice(-maxTail).trimStart();
+    const omitted = Math.max(0, trimmed.length - head.length - tail.length);
+    return `${head}\n\n[... ${omitted} chars omitidos pelo proxy para caber no limite real do upstream (total: ${trimmed.length} chars) ...]\n\n${tail}`;
+  }
+  return `${head}\n[... saída anterior da ferramenta compactada pelo proxy (${trimmed.length} chars) para preservar o histórico da conversa ...]`;
+}
+
+function rewriteToolItemContent(item, maxHead, maxTail = 0) {
+  if (!item || typeof item !== "object") return { item, changed: false };
+  if (item.role === "tool") {
+    if (typeof item.content === "string") {
+      const next = summarizeToolText(item.content, maxHead, maxTail);
+      if (next !== item.content) {
+        return { item: { ...item, content: next }, changed: true };
+      }
+    } else if (Array.isArray(item.content)) {
+      const joined = textOf(item.content);
+      const next = summarizeToolText(joined, maxHead, maxTail);
+      if (next !== joined) {
+        return { item: { ...item, content: next }, changed: true };
+      }
+    }
+  } else if (item.type === "function_call_output") {
+    const raw =
+      typeof item.output === "string"
+        ? item.output
+        : JSON.stringify(item.output ?? "");
+    const next = summarizeToolText(raw, maxHead, maxTail);
+    if (next !== raw) {
+      return { item: { ...item, output: next }, changed: true };
+    }
+  }
+  return { item, changed: false };
+}
+
+export function estimateUpstreamTokens(messages, extraTokens = 0) {
+  const overhead = Number.isFinite(extraTokens) && extraTokens > 0 ? extraTokens : 0;
+  return Math.ceil((estimateTokens(messages) + overhead) * UPSTREAM_TOKEN_SAFETY);
+}
+
+/**
+ * Prepara o histórico para envio ao upstream sem destruir o ledger salvo:
+ * 1) Remove reasoning/reasoning_details de turnos anteriores;
+ * 2) Se ultrapassar o teto efetivo de input do upstream, poda primeiro outputs
+ *    de ferramentas antigos (mantendo 100% dos turnos user/assistant e pares tool);
+ * 3) Se ainda ultrapassar, encolhe outputs gigantes de ferramentas recentes;
+ * 4) Em último caso, aplica compactMessages por histerese.
+ */
+export function prepareUpstreamMessages(
+  messages,
+  {
+    contextWindow = 128000,
+    reserveTokens = 16384,
+    effectiveInputCap = null,
+    keepRecentTokens = 12000,
+    keepRecentTools = 3,
+    extraTokens = 0,
+  } = {},
+) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return {
+      messages,
+      estimatedTokens: estimateUpstreamTokens([], extraTokens),
+      stats: {
+        strippedReasoning: 0,
+        prunedTools: 0,
+        trimmedRecentTools: 0,
+        compacted: false,
+      },
+    };
+  }
+
+  const windowBudget = Math.max(2048, contextWindow - reserveTokens);
+  const inputBudget =
+    typeof effectiveInputCap === "number" &&
+    Number.isFinite(effectiveInputCap) &&
+    effectiveInputCap > 0
+      ? Math.min(windowBudget, effectiveInputCap)
+      : windowBudget;
+
+  let current = messages;
+  let est = estimateUpstreamTokens(current, extraTokens);
+  let strippedReasoning = 0;
+  let prunedTools = 0;
+  let trimmedRecentTools = 0;
+  let compacted = false;
+
+  // Abaixo do teto efetivo do upstream: pass-through limpo sem alterar nada.
+  if (est <= inputBudget) {
+    return {
+      messages: current,
+      estimatedTokens: est,
+      stats: {
+        strippedReasoning: 0,
+        prunedTools: 0,
+        trimmedRecentTools: 0,
+        compacted: false,
+      },
+    };
+  }
+
+  // Camada 1: remove reasoning antigo apenas quando precisa abrir espaço no orçamento.
+  const stripped = stripOldReasoning(current);
+  current = stripped.messages;
+  strippedReasoning = stripped.stripped;
+  est = estimateUpstreamTokens(current, extraTokens);
+
+  // Camada 2A: poda outputs de ferramentas antigos (do mais antigo para o mais recente),
+  // protegendo os últimos `keepRecentTools` resultados de ferramenta.
+  if (est > inputBudget) {
+    const toolIndices = [];
+    for (let i = 0; i < current.length; i += 1) {
+      if (isToolResultItem(current[i])) toolIndices.push(i);
+    }
+    const protectedCount = Math.max(0, keepRecentTools);
+    const oldToolIndices =
+      protectedCount > 0 ? toolIndices.slice(0, -protectedCount) : toolIndices;
+
+    if (oldToolIndices.length > 0) {
+      current = current.slice();
+      for (const idx of oldToolIndices) {
+        const { item, changed } = rewriteToolItemContent(current[idx], 260, 0);
+        if (changed) {
+          current[idx] = item;
+          prunedTools += 1;
+        }
+      }
+      est = estimateUpstreamTokens(current, extraTokens);
+    }
+
+    // Camada 2B: se ainda passar do teto, encolhe resultados recentes gigantes
+    // (preservando início e fim) antes de descartar qualquer turno da conversa.
+    if (est > inputBudget && protectedCount > 0) {
+      const recentToolIndices = toolIndices.slice(-protectedCount);
+      for (const [maxHead, maxTail] of [
+        [3200, 1200],
+        [1200, 500],
+        [320, 0],
+      ]) {
+        if (est <= inputBudget) break;
+        let changedAny = false;
+        for (const idx of recentToolIndices) {
+          const { item, changed } = rewriteToolItemContent(
+            current[idx],
+            maxHead,
+            maxTail,
+          );
+          if (changed) {
+            current[idx] = item;
+            trimmedRecentTools += 1;
+            changedAny = true;
+          }
+        }
+        if (changedAny) {
+          est = estimateUpstreamTokens(current, extraTokens);
+        }
+      }
+    }
+  }
+
+  // Camada 3: em último caso, aplica compactMessages respeitando o orçamento real.
+  if (est > inputBudget) {
+    const rawMaxTokens = Math.max(
+      2048,
+      Math.floor(inputBudget / UPSTREAM_TOKEN_SAFETY),
+    );
+    const beforeLen = current.length;
+    current = compactMessages(current, {
+      maxTokens: rawMaxTokens,
+      extraTokens,
+      keepRecentTokens: Math.min(keepRecentTokens, Math.floor(rawMaxTokens * 0.5)),
+      lowWatermarkRatio: 0.78,
+    });
+    compacted = current.length < beforeLen;
+    est = estimateUpstreamTokens(current, extraTokens);
+  }
+
+  return {
+    messages: current,
+    estimatedTokens: est,
+    stats: {
+      strippedReasoning,
+      prunedTools,
+      trimmedRecentTools,
+      compacted,
+    },
+  };
 }
 
 function safeDecrypt(record) {

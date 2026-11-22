@@ -1169,21 +1169,6 @@ async function collectChatCompletionStream(upstream, res, meta, fallbackModel) {
     ...(systemFingerprint ? { system_fingerprint: systemFingerprint } : {}),
   };
 
-  if (
-    meta.sessionId &&
-    meta.endpoint === "chat/completions" &&
-    upstream.status < 400
-  ) {
-    try {
-      conversations.appendAssistant(meta.sessionId, message);
-    } catch (error) {
-      console.warn(
-        `[conversations] falha ao salvar resposta: ${
-          error instanceof Error ? error.message : error
-        }`,
-      );
-    }
-  }
   if (upstream.status < 400 && parsedUsage?.inputTokens > 0) {
     observeUpstreamInputTokens(meta.model, meta.sentEstTokens, parsedUsage.inputTokens);
   }
@@ -1315,11 +1300,9 @@ async function pipeUpstream(upstream, res, meta) {
   const contentType =
     upstream.headers.get("content-type") ?? "application/json; charset=utf-8";
   const scanner = createResponseScanner(contentType);
-  const assistant = createAssistantCapture(contentType);
   const transform = new Transform({
     transform(chunk, encoding, callback) {
       scanner.push(chunk);
-      assistant.push(chunk);
       callback(null, chunk);
     },
   });
@@ -1335,20 +1318,6 @@ async function pipeUpstream(upstream, res, meta) {
     await pipeline(Readable.fromWeb(upstream.body), transform, res);
     const scanned = scanner.finish();
     if (heartbeat) clearInterval(heartbeat);
-    if (meta.sessionId && meta.endpoint === "chat/completions" && upstream.status < 400) {
-      const message = assistant.finish();
-      if (message) {
-        try {
-          conversations.appendAssistant(meta.sessionId, message);
-        } catch (error) {
-          console.warn(
-            `[conversations] falha ao salvar resposta: ${
-              error instanceof Error ? error.message : error
-            }`,
-          );
-        }
-      }
-    }
     if (upstream.status < 400 && scanned.usage?.inputTokens > 0) {
       observeUpstreamInputTokens(meta.model, meta.sentEstTokens, scanned.usage.inputTokens);
     }
@@ -1596,40 +1565,14 @@ async function handleProxy(req, res, url) {
     const model = typeof payload?.model === "string" ? payload.model : null;
     const wantsStream = payload?.stream === true;
 
-    // O cliente não precisa mandar thread/conversation id. O proxy reconhece
-    // a conversa pelo histórico, restaura o que foi compactado e usa um id
-    // estável que não depende de conta nem de modelo.
-    let conversation = null;
-    try {
-      conversation = conversations.resolve({
-        body: payload,
-        endpoint,
-        headers: req.headers,
-        model,
-        address: req.socket.remoteAddress,
-      });
-      if (conversation) {
-        if (endpoint === "chat/completions") {
-          payload = { ...payload, messages: conversation.messages };
-        } else if (Array.isArray(payload?.input)) {
-          payload = { ...payload, input: conversation.messages };
-        }
-        payload = { ...payload, prompt_cache_key: conversation.sessionId };
-      }
-    } catch (error) {
-      console.warn(
-        `[conversations] ${error instanceof Error ? error.message : "falhou"}`,
-      );
-    }
-    if (!conversation) {
-      const identity = applyCacheIdentity({
-        body: payload,
-        headers: req.headers,
-        accountId: account.id,
-        endpoint,
-      });
-      conversation = { sessionId: identity.key, restored: 0 };
-    }
+    // Identidade de cache/afinidade sem alterar o histórico enviado pelo cliente.
+    const identity = applyCacheIdentity({
+      body: payload,
+      headers: req.headers,
+      accountId: account.id,
+      endpoint,
+    });
+    const conversation = { sessionId: identity.key, restored: 0 };
 
     // Prepara o histórico para o upstream respeitando o teto efetivo real da DeepAI:
     // 1) remove reasoning antigo; 2) poda outputs de tool antigos preservando todos os turnos;

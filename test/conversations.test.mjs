@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ConversationStore, messageSignature, compactMessages } from "../src/conversations.mjs";
+import {
+  ConversationStore,
+  messageSignature,
+  compactMessages,
+  estimatePayloadOverheadTokens,
+  prepareUpstreamMessages,
+} from "../src/conversations.mjs";
 
 function tempStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deepai-conversations-"));
@@ -289,4 +295,153 @@ test("session id determinístico após clear sem hint do cliente", () => {
   assert.equal(first.sessionId, second.sessionId);
   assert.match(first.sessionId, /^cs_/);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("compactMessages contabiliza extraTokens de tools e não estoura orçamento", () => {
+  const tools = [
+    {
+      type: "function",
+      function: {
+        name: "read_file",
+        description: "x".repeat(40000),
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
+    },
+  ];
+  const extraTokens = estimatePayloadOverheadTokens({ tools });
+  assert.ok(extraTokens >= 10000);
+
+  const msgs = [{ role: "system", content: "sys" }];
+  for (let i = 0; i < 40; i++) {
+    msgs.push({ role: "user", content: "u".repeat(2000) + i });
+    msgs.push({ role: "assistant", content: "a".repeat(2000) + i });
+  }
+  const out = compactMessages(msgs, {
+    contextWindow: 32000,
+    reserveTokens: 4000,
+    keepRecentTokens: 4000,
+    extraTokens,
+  });
+  assert.ok(out.length < msgs.length);
+  assert.equal(out[0].role, "system");
+  assert.equal(out[out.length - 1].content.endsWith("39"), true);
+});
+
+test("compactMessages não deixa assistant com tool_calls órfão nem corta par tool", () => {
+  const msgs = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "u1 ".repeat(1200) },
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "ls", arguments: "{}" } }],
+    },
+    { role: "tool", tool_call_id: "call_1", content: "r1 ".repeat(1200) },
+    { role: "user", content: "u2 ".repeat(1200) },
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "call_2", type: "function", function: { name: "cat", arguments: "{}" } }],
+    },
+    { role: "tool", tool_call_id: "call_2", content: "ok" },
+  ];
+  const out = compactMessages(msgs, {
+    maxTokens: 2500,
+    keepRecentTokens: 1200,
+  });
+  // Se call_2 está presente, seu tool result também está; nenhum tool fica sem assistant antes.
+  for (let i = 1; i < out.length; i++) {
+    if (out[i].role === "tool") {
+      assert.ok(
+        out.slice(1, i).some(
+          (m) =>
+            m.role === "assistant" &&
+            Array.isArray(m.tool_calls) &&
+            m.tool_calls.some((tc) => tc.id === out[i].tool_call_id),
+        ),
+        "tool result sem assistant correspondente antes",
+      );
+    }
+  }
+});
+
+test("compactMessages preserva par function_call e function_call_output em responses", () => {
+  const input = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "a".repeat(6000) },
+    { type: "function_call", call_id: "fc_1", name: "read", arguments: '{"path":"a.js"}' },
+    { type: "function_call_output", call_id: "fc_1", output: "b".repeat(4000) },
+    { role: "user", content: "continua" },
+  ];
+  const out = compactMessages(input, {
+    maxTokens: 2200,
+    keepRecentTokens: 1200,
+  });
+  const hasOutput = out.some((m) => m.type === "function_call_output" && m.call_id === "fc_1");
+  const hasCall = out.some((m) => m.type === "function_call" && m.call_id === "fc_1");
+  assert.equal(hasOutput, hasCall);
+});
+
+test("prepareUpstreamMessages remove reasoning antigo e poda tools antigos mantendo todos os turnos", () => {
+  const msgs = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "leia o arquivo 1" },
+    {
+      role: "assistant",
+      content: null,
+      reasoning: "pensamento gigante ".repeat(400),
+      reasoning_details: [{ type: "reasoning.text", text: "detalhe ".repeat(400) }],
+      tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: '{"p":"a.js"}' } }],
+    },
+    { role: "tool", tool_call_id: "c1", content: "Read file a.js\n" + "linha de codigo\n".repeat(4000) },
+    { role: "assistant", content: "Li o arquivo a.js e encontrei o bug X.", reasoning_content: "r".repeat(2000) },
+    { role: "user", content: "agora leia b.js" },
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "c2", type: "function", function: { name: "read", arguments: '{"p":"b.js"}' } }],
+    },
+    { role: "tool", tool_call_id: "c2", content: "Read file b.js\nconteudo curto" },
+    { role: "assistant", content: "Li b.js tambem." },
+    { role: "user", content: "qual era o bug em a.js?" },
+  ];
+
+  const prepared = prepareUpstreamMessages(msgs, {
+    contextWindow: 320000,
+    reserveTokens: 16384,
+    effectiveInputCap: 8000,
+    keepRecentTools: 1,
+  });
+
+  // Todos os 10 turnos preservados (nenhum user/assistant descartado!)
+  assert.equal(prepared.messages.length, msgs.length);
+  assert.ok(prepared.stats.strippedReasoning >= 2);
+  assert.equal(prepared.stats.prunedTools, 1);
+  assert.equal(prepared.stats.compacted, false);
+  assert.ok(prepared.estimatedTokens <= 8000);
+  // Reasoning removido dos assistants
+  assert.equal(prepared.messages[2].reasoning, undefined);
+  assert.equal(prepared.messages[2].reasoning_details, undefined);
+  assert.equal(prepared.messages[4].reasoning_content, undefined);
+  // Tool antigo compactado preservando cabeçalho; tool recente intacto
+  assert.match(prepared.messages[3].content, /Read file a\.js/);
+  assert.match(prepared.messages[3].content, /compactada pelo proxy/);
+  assert.equal(prepared.messages[7].content, "Read file b.js\nconteudo curto");
+});
+
+test("prepareUpstreamMessages mantém tudo intacto abaixo do teto", () => {
+  const msgs = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "oi" },
+    { role: "assistant", content: "olá", reasoning: "pensando" },
+  ];
+  const prepared = prepareUpstreamMessages(msgs, {
+    contextWindow: 320000,
+    reserveTokens: 16384,
+    effectiveInputCap: 33000,
+  });
+  assert.strictEqual(prepared.messages, msgs);
+  assert.equal(prepared.stats.strippedReasoning, 0);
+  assert.equal(prepared.stats.prunedTools, 0);
+  assert.equal(prepared.stats.compacted, false);
 });
