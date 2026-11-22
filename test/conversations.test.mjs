@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ConversationStore, messageSignature } from "../src/conversations.mjs";
+import { ConversationStore, messageSignature, compactMessages } from "../src/conversations.mjs";
 
 function tempStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deepai-conversations-"));
@@ -207,4 +207,86 @@ test("prefixo menor restaura o restante na ordem correta", () => {
     shorter.messages.map((message) => message.content),
     [system.content, user1.content, assistant1.content, user2.content],
   );
+});
+
+
+test("janela deslizante com hint não encolhe o ledger e preserva cauda nova", () => {
+  const { store, dir } = tempStore();
+  const headers = { "x-session-affinity": "sess-slide" };
+  const base = [
+    { role: "system", content: "S" },
+    { role: "user", content: "U1" },
+    { role: "assistant", content: "A1" },
+    { role: "user", content: "U2" },
+    { role: "assistant", content: "A2" },
+    { role: "user", content: "U3" },
+  ];
+  const r1 = store.resolve({
+    body: { messages: base, prompt_cache_key: "sess-slide" },
+    headers,
+    endpoint: "/v1/chat/completions",
+    model: "gpt-5",
+  });
+  assert.equal(r1.created, true);
+  assert.equal(r1.messages.length, 6);
+
+  const windowed = [
+    { role: "system", content: "S" },
+    { role: "assistant", content: "A2" },
+    { role: "user", content: "U3" },
+    { role: "assistant", content: "A3" },
+    { role: "user", content: "U4" },
+  ];
+  const r2 = store.resolve({
+    body: { messages: windowed, prompt_cache_key: "sess-slide" },
+    headers,
+    endpoint: "/v1/chat/completions",
+    model: "gpt-5",
+  });
+  assert.equal(r2.sessionId, r1.sessionId);
+  assert.equal(r2.messages.length, 8);
+  assert.deepEqual(r2.messages.map((m) => m.content), ["S", "U1", "A1", "U2", "A2", "U3", "A3", "U4"]);
+  store.flush();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("compactMessages usa histerese e não cai em cliff de 20k", () => {
+  const big = [{ role: "system", content: "sys" }];
+  for (let i = 0; i < 200; i++) {
+    big.push({ role: "user", content: "u".repeat(2000) + i });
+    big.push({ role: "assistant", content: "a".repeat(2000) + i });
+  }
+  const maxTokens = 112000;
+  const out = compactMessages(big, { maxTokens, keepRecentTokens: 20000 });
+  assert.equal(out[0].role, "system");
+  // deve manter bem mais que 20k tokens e ficar abaixo do orçamento
+  const est = out.reduce((s, m) => s + Math.ceil(JSON.stringify(m.content || "").length / 4), 0);
+  assert.ok(est > 30000, `esperava >30k, veio ${est}`);
+  assert.ok(est <= maxTokens, `passou do orçamento: ${est}`);
+  // última mensagem preservada
+  assert.equal(out[out.length - 1].content.endsWith("199"), true);
+});
+
+test("session id fica estável após clear quando cliente manda prompt_cache_key", () => {
+  const { store, dir } = tempStore();
+  const body = { model: "gpt-6-luna", prompt_cache_key: "thread-fixa", messages: [system, user1] };
+  const headers = { authorization: "Bearer dai_teste" };
+  const first = store.resolve({ body, endpoint: "chat/completions", headers, model: "gpt-6-luna" });
+  store.clear();
+  const second = store.resolve({ body, endpoint: "chat/completions", headers, model: "gpt-6-luna" });
+  assert.equal(first.sessionId, "thread-fixa");
+  assert.equal(second.sessionId, "thread-fixa");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("session id determinístico após clear sem hint do cliente", () => {
+  const { store, dir } = tempStore();
+  const body = { model: "gpt-6-luna", messages: [system, user1] };
+  const headers = { authorization: "Bearer dai_teste" };
+  const first = store.resolve({ body, endpoint: "chat/completions", headers, model: "gpt-6-luna" });
+  store.clear();
+  const second = store.resolve({ body, endpoint: "chat/completions", headers, model: "gpt-6-luna" });
+  assert.equal(first.sessionId, second.sessionId);
+  assert.match(first.sessionId, /^cs_/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

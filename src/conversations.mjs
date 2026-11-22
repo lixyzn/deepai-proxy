@@ -270,81 +270,101 @@ function trimMessages(messages) {
 }
 
 /**
- * Compacta mensagens no estilo Pi SDK: quando o contexto excede
- * `contextWindow - reserveTokens`, mantém as mensagens mais recentes
- * dentro de `keepRecentTokens`, preservando system/developer no início.
+ * Compatação com histerese: quando passa do orçamento (high watermark),
+ * corta do início do corpo até um alvo menor (low watermark) e mantém esse
+ * piso estável até bater o orçamento de novo. Isso evita o "cliff" 40k->20k->10k
+ * e preserva prefixo mais estável para KV cache upstream.
+ *
+ * `keepRecentTokens` é tratado como alvo mínimo após compatação; o alvo real
+ * é max(keepRecentTokens, budget*ratio), limitado ao budget.
  */
 export function compactMessages(
   messages,
-  { contextWindow = 128000, reserveTokens = 16384, keepRecentTokens = 20000 } = {},
+  {
+    contextWindow = 128000,
+    reserveTokens = 16384,
+    keepRecentTokens = 20000,
+    maxTokens,
+    lowWatermarkRatio = 0.62,
+  } = {},
 ) {
   if (!Array.isArray(messages) || messages.length <= 2) return messages;
 
-  const budget = Math.max(1024, contextWindow - reserveTokens);
+  const budget = Math.max(1024, maxTokens ? maxTokens : contextWindow - reserveTokens);
   const totalTokens = estimateTokens(messages);
   if (totalTokens <= budget) return messages;
 
-  const systemMsgs = [];
-  const bodyMsgs = [];
-  for (const msg of messages) {
-    if (isSystem(msg)) systemMsgs.push(msg);
-    else bodyMsgs.push(msg);
+  const first = messages[0];
+  const leadingSystem = isSystem(first) ? [first] : [];
+  const body = isSystem(first) ? messages.slice(1) : messages.slice();
+  if (body.length === 0) return messages;
+
+  const systemTokens = estimateTokens(leadingSystem);
+  const ratio = Number.isFinite(lowWatermarkRatio)
+    ? Math.min(0.9, Math.max(0.4, lowWatermarkRatio))
+    : 0.62;
+  const target = Math.max(
+    1024,
+    Math.min(budget - 1024, Math.max(keepRecentTokens, Math.floor(budget * ratio))),
+  );
+  const recentBudget = Math.max(512, target - systemTokens);
+
+  const recent = [];
+  let recentTokens = 0;
+  for (let index = body.length - 1; index >= 0; index -= 1) {
+    const message = body[index];
+    const tokens = estimateTokens([message]);
+    if (recentTokens + tokens > recentBudget && recent.length > 0) break;
+    recent.unshift(message);
+    recentTokens += tokens;
   }
 
-  // Mantém as mensagens mais recentes dentro de keepRecentTokens
-  const kept = [];
-  let keptTokens = 0;
-  for (let i = bodyMsgs.length - 1; i >= 0; i -= 1) {
-    const msg = bodyMsgs[i];
-    const msgTokens = estimateTokens([msg]);
-    if (keptTokens + msgTokens > keepRecentTokens && kept.length > 0) break;
-    kept.unshift(msg);
-    keptTokens += msgTokens;
-  }
-
-  // Evita cortar no meio de uma sequência tool_call/tool_result
-  let cutIndex = bodyMsgs.length - kept.length;
-  while (cutIndex > 0 && bodyMsgs[cutIndex]?.role === "tool") {
+  // Não corta no meio de uma sequência de ferramentas.
+  let cutIndex = body.length - recent.length;
+  while (cutIndex > 0 && recent[0]?.role === "tool") {
     cutIndex -= 1;
-    const msg = bodyMsgs[cutIndex];
-    kept.unshift(msg);
-    keptTokens += estimateTokens([msg]);
+    recent.unshift(body[cutIndex]);
+    recentTokens += estimateTokens([body[cutIndex]]);
   }
-  // Se o corte caiu em assistant com tool_calls, inclui os tool results seguintes já presentes;
-  // se o primeiro kept é assistant com tool_calls cujos resultados foram parcialmente cortados, recua mais.
-  if (cutIndex > 0) {
-    const first = kept[0];
-    if (first?.role === "assistant" && Array.isArray(first.tool_calls) && first.tool_calls.length > 0) {
-      const toolCallIds = new Set(first.tool_calls.map((tc) => tc?.id).filter(Boolean));
-      const hasAllResults = [...kept.slice(1)].filter((m) => m?.role === "tool").some((m) => toolCallIds.has(m.tool_call_id));
-      // se nenhum resultado presente, recua para incluir o par inteiro anterior ou descarta o assistant órfão
-      if (!hasAllResults) {
-        // remove assistant órfão do início do kept
-        kept.shift();
-        keptTokens -= estimateTokens([first]);
-      }
+  // Se o corte deixou um assistant com tool_calls sem nenhum resultado, recua.
+  while (cutIndex > 0) {
+    const firstRecent = recent[0];
+    if (
+      firstRecent?.role === "assistant" &&
+      Array.isArray(firstRecent.tool_calls) &&
+      firstRecent.tool_calls.length > 0 &&
+      !recent.slice(1).some((m) => m.role === "tool")
+    ) {
+      cutIndex -= 1;
+      recent.unshift(body[cutIndex]);
+      recentTokens += estimateTokens([body[cutIndex]]);
+      continue;
     }
+    break;
   }
 
-  // Garante que o system prompt caiba; se não couber, trunca só o texto do system
-  let systemTokens = estimateTokens(systemMsgs);
-  let finalSystem = systemMsgs;
-  const availableForSystem = Math.max(512, budget - keptTokens);
-  if (systemTokens > availableForSystem && systemMsgs.length > 0) {
-    finalSystem = systemMsgs.map((msg) => {
-      if (typeof msg.content !== "string") return msg;
-      const maxChars = Math.max(256, availableForSystem * 4);
-      if (msg.content.length <= maxChars) return msg;
-      return { ...msg, content: msg.content.slice(0, maxChars) + "\n[...system prompt truncado...]" };
-    });
-    systemTokens = estimateTokens(finalSystem);
+  const result = [...leadingSystem, ...recent];
+
+  // Remove órfãos óbvios de tool no começo da janela.
+  while (
+    result.length > leadingSystem.length + 1 &&
+    result[leadingSystem.length]?.role === "tool"
+  ) {
+    result.splice(leadingSystem.length, 1);
   }
-
-  let result = [...finalSystem, ...kept];
-
-  // Se ainda estiver acima do budget, remove do início do body (após system)
-  while (estimateTokens(result) > budget && result.length > systemMsgs.length + 1) {
-    result.splice(finalSystem.length, 1);
+  // Remove assistant+tool_calls sem qualquer resultado correspondente no começo.
+  while (result.length > leadingSystem.length) {
+    const firstBody = result[leadingSystem.length];
+    if (
+      firstBody?.role === "assistant" &&
+      Array.isArray(firstBody.tool_calls) &&
+      firstBody.tool_calls.length > 0 &&
+      !result.slice(leadingSystem.length + 1).some((m) => m.role === "tool")
+    ) {
+      result.splice(leadingSystem.length, 1);
+      continue;
+    }
+    break;
   }
 
   return result;
@@ -486,60 +506,61 @@ export class ConversationStore {
     return best;
   }
 
-  restore(session, incoming) {
-    if (!session || session.messages.length === 0) {
-      return { messages: incoming, restored: 0 };
-    }
+  restore(session, incoming, { trusted = false } = {}) {
+    const stored = session.messages;
+    if (stored.length === 0) return { messages: incoming, restored: 0 };
+    if (incoming.length === 0) return { messages: stored, restored: stored.length };
+
     const storedSigs = session.signatures;
     const incomingSigs = incoming.map(messageSignature);
     const overlap = longestOverlap(storedSigs, incomingSigs);
-    if (overlap.length === 0) return { messages: incoming, restored: 0 };
+    if (overlap.length === 0) {
+      if (trusted && stored.length > 0) {
+        const incomingBody = incoming.filter((m) => !isSystem(m));
+        const storedTail = new Set(storedSigs.slice(-24));
+        const novel = incomingBody.filter((m) => !storedTail.has(messageSignature(m)));
+        if (novel.length > 0) {
+          const prefix = isSystem(incoming[0]) ? [incoming[0]] : (isSystem(stored[0]) ? [stored[0]] : []);
+          const base = stored.filter((m) => !isSystem(m));
+          return { messages: trimMessages([...prefix, ...base, ...novel]), restored: base.length };
+        }
+        return { messages: stored, restored: 0 };
+      }
+      return { messages: incoming, restored: 0 };
+    }
 
     const currentHasSystem = isSystem(incoming[0]);
-    let missing = [];
-
     const leadingOnlySystem =
       overlap.incomingStart > 0 &&
       incoming.slice(0, overlap.incomingStart).every(isSystem);
 
-    if (
-      (overlap.incomingStart === 0 || leadingOnlySystem) &&
-      overlap.storedStart > 0
-    ) {
-      // O cliente mandou só a cauda (compactou/truncou o começo), mas pode
-      // ter injetado um system novo. Preserva o system atual e restaura o
-      // histórico que veio antes do trecho em comum.
-      missing = session.messages.slice(0, overlap.storedStart);
-    } else if (
-      overlap.incomingStart === 0 &&
-      overlap.storedStart === 0 &&
-      incoming.length < session.messages.length
-    ) {
-      // O cliente mandou só um prefixo menor; o restante está no ledger.
+    if ((overlap.incomingStart === 0 || leadingOnlySystem) && overlap.storedStart > 0) {
+      let missing = session.messages.slice(0, overlap.storedStart);
+      if (currentHasSystem) missing = missing.filter((message) => !isSystem(message));
       const prefix = currentHasSystem ? [incoming[0]] : [];
+      const rest = currentHasSystem ? incoming.slice(1) : incoming.slice();
+      return { messages: trimMessages([...prefix, ...missing, ...rest]), restored: missing.length };
+    }
+
+    if (overlap.incomingStart === 0 && overlap.storedStart === 0 && incoming.length < session.messages.length) {
+      const prefix = currentHasSystem ? [incoming[0]] : (isSystem(stored[0]) ? [stored[0]] : []);
       const storedBody = session.messages.filter((message) => !isSystem(message));
-      const messages = trimMessages([...prefix, ...storedBody]);
-      return {
-        messages,
-        restored: Math.max(0, messages.length - incoming.length),
-      };
-    } else {
-      return { messages: incoming, restored: 0 };
+      const incomingTail = incoming.slice(overlap.length);
+      const storedSigsSet = new Set(storedSigs);
+      const novelTail = incomingTail.filter((m) => !storedSigsSet.has(messageSignature(m)));
+      return { messages: trimMessages([...prefix, ...storedBody, ...novelTail]), restored: Math.max(0, storedBody.length) };
     }
 
-    if (currentHasSystem) {
-      missing = missing.filter((message) => !isSystem(message));
+    if (trusted && incoming.length < stored.length) {
+      const incomingBody = incoming.filter((m) => !isSystem(m));
+      const storedSigsSet = new Set(storedSigs);
+      const novel = incomingBody.filter((m) => !storedSigsSet.has(messageSignature(m)));
+      const prefix = currentHasSystem ? [incoming[0]] : (isSystem(stored[0]) ? [stored[0]] : []);
+      const base = stored.filter((m) => !isSystem(m));
+      return { messages: trimMessages(novel.length > 0 ? [...prefix, ...base, ...novel] : [...prefix, ...base]), restored: novel.length > 0 ? base.length : 0 };
     }
-    if (missing.length === 0) return { messages: incoming, restored: 0 };
 
-    // O system atual do cliente manda no topo; o histórico entra depois.
-    const prefix = currentHasSystem ? [incoming[0]] : [];
-    const rest = currentHasSystem ? incoming.slice(1) : incoming;
-    const messages = trimMessages([...prefix, ...missing, ...rest]);
-    return {
-      messages,
-      restored: Math.max(0, messages.length - incoming.length),
-    };
+    return { messages: incoming, restored: 0 };
   }
 
   resolve({ body, endpoint, headers, model, address }) {
@@ -554,6 +575,7 @@ export class ConversationStore {
       ? this.sessions.find((item) => item.id === matched)
       : null;
     let created = false;
+    let hintMatched = !!(session && hint);
 
     if (session && hint) this.stats.matched += 1;
 
@@ -567,30 +589,44 @@ export class ConversationStore {
     }
 
     if (!session) {
-      created = true;
-      const now = new Date().toISOString();
-      session = {
-        id: `cs_${randomBytes(16).toString("hex")}`,
-        createdAt: now,
-        updatedAt: now,
-        clientKey: client,
-        endpoint,
-        model: model ?? null,
-        messages: [],
-        signatures: [],
-        firstUserHash: null,
-        lastUserHash: null,
-        hints: [],
-        encrypted: null,
-        restored: 0,
-        bytes: 0,
-        tokensEstimate: 0,
-      };
-      this.sessions.unshift(session);
-      this.stats.created += 1;
+      const stableId = hint && KEY_RE.test(key)
+        ? key
+        : hint
+          ? `cs_${hint}`
+          : `cs_${hashText(`session\0${client}\0${endpoint}\0${model ?? ""}\0${firstUserHash(messages) ?? ""}`).slice(0, 32)}`;
+      const existing = this.sessions.find((item) => item.id === stableId);
+      if (existing && existing.clientKey === client) {
+        session = existing;
+        matched = session.id;
+        if (hint) hintMatched = true;
+        this.stats.matched += 1;
+      } else {
+        created = true;
+        const now = new Date().toISOString();
+        const id = existing ? `cs_${randomBytes(16).toString("hex")}` : stableId;
+        session = {
+          id,
+          createdAt: now,
+          updatedAt: now,
+          clientKey: client,
+          endpoint,
+          model: model ?? null,
+          messages: [],
+          signatures: [],
+          firstUserHash: null,
+          lastUserHash: null,
+          hints: [],
+          encrypted: null,
+          restored: 0,
+          bytes: 0,
+          tokensEstimate: 0,
+        };
+        this.sessions.unshift(session);
+        this.stats.created += 1;
+      }
     }
 
-    let plan = this.restore(session, messages);
+    let plan = this.restore(session, messages, { trusted: true });
     const incomingHasAssistant = messages.some(
       (message) =>
         message?.role === "assistant" ||
@@ -619,7 +655,14 @@ export class ConversationStore {
         restored: Math.max(0, merged.length - messages.length),
       };
     }
-    const finalMessages = plan.messages;
+    let finalMessages = plan.messages;
+    if (hintMatched && !created && plan.restored === 0 && finalMessages.length < session.messages.length) {
+      const storedSigs = new Set(session.signatures);
+      const novel = messages.filter((m) => !isSystem(m) && !storedSigs.has(messageSignature(m)));
+      const prefix = isSystem(finalMessages[0]) ? [finalMessages[0]] : (isSystem(session.messages[0]) ? [session.messages[0]] : []);
+      const base = session.messages.filter((m) => !isSystem(m));
+      finalMessages = trimMessages(novel.length > 0 ? [...prefix, ...base, ...novel] : [...prefix, ...base]);
+    }
     const signatures = finalMessages.map(messageSignature);
     const encrypted = encryptSecret(JSON.stringify(finalMessages));
 
