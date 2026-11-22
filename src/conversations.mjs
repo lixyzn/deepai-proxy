@@ -194,7 +194,7 @@ function extractHistory(body, endpoint) {
   );
 }
 
-function longestOverlap(stored, incoming) {
+function longestOverlap(stored, incoming, { preferTail = false } = {}) {
   const positions = new Map();
   for (let index = 0; index < stored.length; index += 1) {
     const list = positions.get(stored[index]) ?? [];
@@ -215,7 +215,15 @@ function longestOverlap(stored, incoming) {
       ) {
         length += 1;
       }
-      if (length > best.length) {
+      const better =
+        length > best.length ||
+        (preferTail &&
+          length === best.length &&
+          length > 0 &&
+          (incomingIndex > best.incomingStart ||
+            (incomingIndex === best.incomingStart &&
+              storedIndex > best.storedStart)));
+      if (better) {
         best = {
           length,
           storedStart: storedIndex,
@@ -506,14 +514,28 @@ export class ConversationStore {
     return best;
   }
 
-  restore(session, incoming, { trusted = false } = {}) {
+  restore(session, incoming, { trusted = false, hintMatched = false } = {}) {
     const stored = session.messages;
     if (stored.length === 0) return { messages: incoming, restored: 0 };
     if (incoming.length === 0) return { messages: stored, restored: stored.length };
 
     const storedSigs = session.signatures;
     const incomingSigs = incoming.map(messageSignature);
-    const overlap = longestOverlap(storedSigs, incomingSigs);
+    const overlap = longestOverlap(storedSigs, incomingSigs, { preferTail: true });
+    const storedSigsSet = new Set(storedSigs);
+
+    // Semantic compaction: client replaced old history with a shorter
+    // summary/rewritten form while keeping recent tail overlap. Accept the
+    // compacted incoming as the new truth instead of merging with the full
+    // stored body, which would duplicate context and undo compaction.
+    const novelBeforeOverlap =
+      overlap.length > 0 &&
+      overlap.incomingStart > 0 &&
+      incoming.slice(0, overlap.incomingStart).some((m, i) => !isSystem(m) && !storedSigsSet.has(incomingSigs[i]));
+    const compactionTrusted = hintMatched || (trusted && overlap.length >= 2);
+    const isCompaction =
+      compactionTrusted && incoming.length < stored.length && novelBeforeOverlap;
+
     if (overlap.length === 0) {
       if (trusted && stored.length > 0) {
         const incomingBody = incoming.filter((m) => !isSystem(m));
@@ -527,6 +549,10 @@ export class ConversationStore {
         return { messages: stored, restored: 0 };
       }
       return { messages: incoming, restored: 0 };
+    }
+
+    if (isCompaction) {
+      return { messages: trimMessages(incoming), restored: 0, compacted: true };
     }
 
     const currentHasSystem = isSystem(incoming[0]);
@@ -546,14 +572,12 @@ export class ConversationStore {
       const prefix = currentHasSystem ? [incoming[0]] : (isSystem(stored[0]) ? [stored[0]] : []);
       const storedBody = session.messages.filter((message) => !isSystem(message));
       const incomingTail = incoming.slice(overlap.length);
-      const storedSigsSet = new Set(storedSigs);
       const novelTail = incomingTail.filter((m) => !storedSigsSet.has(messageSignature(m)));
       return { messages: trimMessages([...prefix, ...storedBody, ...novelTail]), restored: Math.max(0, storedBody.length) };
     }
 
     if (trusted && incoming.length < stored.length) {
       const incomingBody = incoming.filter((m) => !isSystem(m));
-      const storedSigsSet = new Set(storedSigs);
       const novel = incomingBody.filter((m) => !storedSigsSet.has(messageSignature(m)));
       const prefix = currentHasSystem ? [incoming[0]] : (isSystem(stored[0]) ? [stored[0]] : []);
       const base = stored.filter((m) => !isSystem(m));
@@ -626,7 +650,7 @@ export class ConversationStore {
       }
     }
 
-    let plan = this.restore(session, messages, { trusted: true });
+    let plan = this.restore(session, messages, { trusted: true, hintMatched });
     const incomingHasAssistant = messages.some(
       (message) =>
         message?.role === "assistant" ||
@@ -634,9 +658,10 @@ export class ConversationStore {
         message?.type === "function_call_output",
     );
     if (
-      hint &&
-      matched &&
+      hintMatched &&
+      !created &&
       plan.restored === 0 &&
+      !plan.compacted &&
       !incomingHasAssistant &&
       session.messages.length > 0 &&
       messages.some((message) => message?.role === "user")
@@ -656,12 +681,30 @@ export class ConversationStore {
       };
     }
     let finalMessages = plan.messages;
-    if (hintMatched && !created && plan.restored === 0 && finalMessages.length < session.messages.length) {
-      const storedSigs = new Set(session.signatures);
-      const novel = messages.filter((m) => !isSystem(m) && !storedSigs.has(messageSignature(m)));
-      const prefix = isSystem(finalMessages[0]) ? [finalMessages[0]] : (isSystem(session.messages[0]) ? [session.messages[0]] : []);
-      const base = session.messages.filter((m) => !isSystem(m));
-      finalMessages = trimMessages(novel.length > 0 ? [...prefix, ...base, ...novel] : [...prefix, ...base]);
+    if (hintMatched && !created && plan.restored === 0 && finalMessages.length < session.messages.length && !plan.compacted) {
+      const storedSigsSet = new Set(session.signatures);
+      const finalSigs = finalMessages.map(messageSignature);
+      const novelIndices = [];
+      for (let i = 0; i < finalMessages.length; i += 1) {
+        if (!isSystem(finalMessages[i]) && !storedSigsSet.has(finalSigs[i])) novelIndices.push(i);
+      }
+      if (novelIndices.length > 0) {
+        let lastKnownIndex = -1;
+        for (let i = 0; i < finalSigs.length; i += 1) {
+          if (storedSigsSet.has(finalSigs[i])) lastKnownIndex = i;
+        }
+        const novelBeforeLastKnown = novelIndices.some((i) => i < lastKnownIndex);
+        if (!novelBeforeLastKnown) {
+          // Sliding window: novelties only at tail, restore missing stored body.
+          const prefix = isSystem(finalMessages[0]) ? [finalMessages[0]] : (isSystem(session.messages[0]) ? [session.messages[0]] : []);
+          const base = session.messages.filter((m) => !isSystem(m));
+          const novel = novelIndices.map((i) => finalMessages[i]);
+          finalMessages = trimMessages([...prefix, ...base, ...novel]);
+        }
+        // else: semantic compaction - keep the compacted incoming as-is.
+      } else {
+        finalMessages = session.messages;
+      }
     }
     const signatures = finalMessages.map(messageSignature);
     const encrypted = encryptSecret(JSON.stringify(finalMessages));

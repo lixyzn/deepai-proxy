@@ -526,7 +526,11 @@ model:   "deepai/glm-5.3-flash"</code></pre>
           <button class="btn btn-primary" id="gateSubmit" type="submit">Criar senha e entrar</button>
         </form>
         <p class="gate-error" id="gateError" role="alert"></p>
-        <p class="gate-hint hidden" id="gateForgot">Esqueceu a senha? Pare o proxy, rode <code>npm run reset-password</code> e abra o painel de novo.</p>
+        <div class="gate-hint hidden" id="gateForgot">
+          <span>Esqueceu a senha?</span>
+          <button class="btn btn-ghost btn-sm" id="gateReset" type="button">Resetar senha</button>
+          <span class="gate-hint-detail">Apaga a senha atual e pede uma nova. Funciona apenas no computador que roda o proxy e encerra as sessões abertas.</span>
+        </div>
       </div>
     </div>
 
@@ -536,6 +540,29 @@ model:   "deepai/glm-5.3-flash"</code></pre>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="confirmCancel" type="button">Cancelar</button>
         <button class="btn btn-danger" id="confirmOk" type="button">Confirmar</button>
+      </div>
+    </dialog>
+
+    <dialog class="modal glass update-modal" id="updateDialog">
+      <div class="update-modal-head">
+        <div class="update-badge" id="updateBadge">Atualização</div>
+        <h2 id="updateTitle">Nova versão disponível</h2>
+        <p id="updateMessage" class="muted">Uma nova versão do proxy está disponível no GitHub.</p>
+      </div>
+      <div class="update-meta" id="updateMeta"></div>
+      <div class="update-notes hidden" id="updateNotesWrap">
+        <div class="update-notes-title">O que mudou</div>
+        <pre id="updateNotes"></pre>
+      </div>
+      <div class="update-progress hidden" id="updateProgress" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="updateProgressText">Atualizando...</span>
+      </div>
+      <p class="update-error hidden" id="updateError"></p>
+      <div class="modal-actions" id="updateActions">
+        <button class="btn btn-ghost" id="updateLaterBtn" type="button">Depois</button>
+        <a class="btn btn-ghost hidden" id="updateReleaseBtn" href="#" target="_blank" rel="noopener noreferrer">Ver no GitHub</a>
+        <button class="btn btn-primary" id="updateNowBtn" type="button">Atualizar agora</button>
       </div>
     </dialog>
 

@@ -1,3 +1,7 @@
 data/
 node_modules/
 *.log
+
+# Reverse-engineering artifacts / local dumps
+deepai-extracted/
+deepai_bundles/

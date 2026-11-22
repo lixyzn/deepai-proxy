@@ -77,13 +77,15 @@ A senha é guardada como hash `scrypt`; o proxy nunca salva a senha em texto pur
 
 ### Esqueceu a senha
 
-Pare o proxy, rode o comando abaixo e inicie novamente:
+Na tela de login do painel, clique em **"Resetar senha"**. O proxy apaga a senha atual, encerra as sessões abertas e mostra o formulário para criar uma nova senha.
+
+Por segurança, esse botão só funciona quando o painel é acessado pelo próprio computador que roda o proxy (`127.0.0.1`). Se você acessa o painel por outro dispositivo da rede, use o comando abaixo no computador do proxy:
 
 ```bash
 npm run reset-password
 ```
 
-Isso remove a senha salva. Na próxima inicialização, o painel pedirá para criar uma nova senha.
+Isso remove a senha salva. Na próxima inicialização (ou ao recarregar o painel), o proxy pedirá para criar uma nova senha.
 
 ## 🌐 Usar como OpenAI
 

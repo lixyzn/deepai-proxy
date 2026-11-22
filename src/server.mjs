@@ -1,10 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
+import { execFile as execFileCb, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { resolveModelAlias } from "./aliases.mjs";
 import { LoginManager } from "./auth.mjs";
 import { normalizeChatPayload } from "./compat.mjs";
@@ -33,6 +35,7 @@ import {
   loadConfig,
   publicAccount,
   publicAccounts,
+  resetAdminPassword,
   rotateProxyToken,
   setActiveAccount,
   setAdminPassword,
@@ -54,6 +57,234 @@ const UPSTREAM_TIMEOUT_MS = Math.max(
   30_000,
   Number(process.env.UPSTREAM_TIMEOUT_MS || 20 * 60 * 1000),
 );
+
+const execFile = promisify(execFileCb);
+const UPDATE_REPO = process.env.DEEPAI_UPDATE_REPO || "lixyzn/deepai-proxy";
+const UPDATE_BRANCH = process.env.DEEPAI_UPDATE_BRANCH || "main";
+const UPDATE_CHECK_TTL_MS = 30 * 60 * 1000;
+let updateCache = { checkedAt: 0, data: null, error: null, promise: null };
+let updateApplying = false;
+
+function normalizeVersion(v) {
+  return String(v || "").trim().replace(/^v/i, "");
+}
+
+function versionParts(v) {
+  const clean = normalizeVersion(v).split("-")[0];
+  return clean
+    .split(".")
+    .map((n) => Number.parseInt(n, 10))
+    .map((n) => (Number.isFinite(n) && n >= 0 ? n : 0));
+}
+
+function compareVersions(a, b) {
+  const aa = versionParts(a);
+  const bb = versionParts(b);
+  const len = Math.max(aa.length, bb.length, 3);
+  for (let i = 0; i < len; i += 1) {
+    const da = aa[i] || 0;
+    const db = bb[i] || 0;
+    if (da > db) return 1;
+    if (da < db) return -1;
+  }
+  return 0;
+}
+
+async function fetchLatestUpdate() {
+  const repo = UPDATE_REPO;
+  const headers = {
+    "User-Agent": "deepai-proxy-updater",
+    Accept: "application/vnd.github+json",
+  };
+
+  try {
+    const relRes = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers,
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (relRes.ok) {
+      const rel = await relRes.json();
+      const version = normalizeVersion(rel.tag_name || rel.name || "");
+      if (version) {
+        return {
+          version,
+          name: rel.name || rel.tag_name || `v${version}`,
+          notes: String(rel.body || "").slice(0, 4000),
+          url: rel.html_url || `https://github.com/${repo}/releases`,
+          publishedAt: rel.published_at || null,
+          source: "release",
+        };
+      }
+    }
+  } catch {
+    // fallback to raw package.json
+  }
+
+  const pkgRes = await fetch(
+    `https://raw.githubusercontent.com/${repo}/${UPDATE_BRANCH}/package.json`,
+    {
+      headers: { "User-Agent": "deepai-proxy-updater" },
+      signal: AbortSignal.timeout(12_000),
+    },
+  );
+  if (!pkgRes.ok) {
+    throw new Error(`Não foi possível consultar atualização no GitHub (${pkgRes.status}).`);
+  }
+  const pkg = await pkgRes.json();
+  const version = normalizeVersion(pkg?.version);
+  if (!version) throw new Error("Versão remota não encontrada no package.json.");
+  return {
+    version,
+    name: `v${version}`,
+    notes: "",
+    url: `https://github.com/${repo}`,
+    publishedAt: null,
+    source: "package",
+  };
+}
+
+async function checkForUpdates({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && updateCache.data && now - updateCache.checkedAt < UPDATE_CHECK_TTL_MS) {
+    return updateCache.data;
+  }
+  if (updateCache.promise) return updateCache.promise;
+
+  updateCache.promise = (async () => {
+    try {
+      const latest = await fetchLatestUpdate();
+      const current = normalizeVersion(VERSION);
+      const latestVersion = normalizeVersion(latest.version);
+      const hasUpdate = compareVersions(latestVersion, current) > 0;
+      const data = {
+        ok: true,
+        currentVersion: current,
+        latestVersion,
+        hasUpdate,
+        repo: UPDATE_REPO,
+        branch: UPDATE_BRANCH,
+        release: latest,
+        checkedAt: new Date().toISOString(),
+      };
+      updateCache = { checkedAt: Date.now(), data, error: null, promise: null };
+      return data;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const data = {
+        ok: false,
+        currentVersion: normalizeVersion(VERSION),
+        latestVersion: null,
+        hasUpdate: false,
+        repo: UPDATE_REPO,
+        branch: UPDATE_BRANCH,
+        error: message,
+        checkedAt: new Date().toISOString(),
+      };
+      updateCache = {
+        checkedAt: Date.now() - (UPDATE_CHECK_TTL_MS - 60_000),
+        data,
+        error: message,
+        promise: null,
+      };
+      return data;
+    }
+  })();
+
+  return updateCache.promise;
+}
+
+async function runGit(args, opts = {}) {
+  return execFile("git", args, {
+    cwd: ROOT,
+    timeout: 120_000,
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+    ...opts,
+  });
+}
+
+async function applyUpdate() {
+  if (updateApplying) {
+    const err = new Error("Uma atualização já está em andamento.");
+    err.status = 409;
+    throw err;
+  }
+  updateApplying = true;
+  try {
+    try {
+      await runGit(["rev-parse", "--is-inside-work-tree"]);
+    } catch {
+      throw new Error(
+        "Este diretório não é um repositório git. Atualize manualmente pelo repositório.",
+      );
+    }
+
+    await runGit(["fetch", "origin", UPDATE_BRANCH]);
+    const { stdout: behindRaw } = await runGit([
+      "rev-list",
+      "--count",
+      `HEAD..origin/${UPDATE_BRANCH}`,
+    ]);
+    const behind = Number(String(behindRaw || "").trim());
+    if (!Number.isFinite(behind) || behind <= 0) {
+      updateCache.checkedAt = 0;
+      return { ok: true, updated: false, message: "O proxy já está na versão mais recente." };
+    }
+
+    const { stdout: statusRaw } = await runGit(["status", "--porcelain"]);
+    const dirty = String(statusRaw || "")
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .filter((line) => !line.startsWith("?? data/") && line !== "?? data");
+    if (dirty.length > 0) {
+      throw new Error(
+        "Existem alterações locais no repositório. Faça commit ou stash antes de atualizar automaticamente.",
+      );
+    }
+
+    const { stdout: beforeHead } = await runGit(["rev-parse", "HEAD"]);
+    await runGit(["pull", "--ff-only", "origin", UPDATE_BRANCH]);
+    const { stdout: afterHead } = await runGit(["rev-parse", "HEAD"]);
+
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+    await execFile(npmCmd, ["install"], {
+      cwd: ROOT,
+      timeout: 240_000,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+      env: process.env,
+    });
+
+    updateCache.checkedAt = 0;
+    return {
+      ok: true,
+      updated: String(beforeHead).trim() !== String(afterHead).trim(),
+      previousHead: String(beforeHead).trim(),
+      currentHead: String(afterHead).trim(),
+      message: "Atualização baixada. Reiniciando o servidor...",
+    };
+  } finally {
+    updateApplying = false;
+  }
+}
+
+function scheduleRestart(delayMs = 1500) {
+  setTimeout(() => {
+    server.close(() => {
+      const child = spawn(process.execPath, process.argv.slice(1), {
+        cwd: ROOT,
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+        windowsHide: true,
+      });
+      child.unref();
+      setTimeout(() => process.exit(0), 500);
+    });
+    setTimeout(() => process.exit(0), 5000).unref();
+  }, delayMs);
+}
 
 const config = loadConfig();
 const telemetry = new Telemetry();
@@ -145,6 +376,12 @@ function requireAdmin(req, res) {
     code: "admin_unauthorized",
   });
   return false;
+}
+
+function isLoopbackRequest(req) {
+  const raw = String(req.socket.remoteAddress ?? "");
+  const address = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+  return address === "127.0.0.1" || address === "::1" || address === "localhost";
 }
 
 function loginBlocked(ip) {
@@ -1593,6 +1830,32 @@ async function handleAdmin(req, res, url) {
     return;
   }
 
+  if (section === "reset-password" && !action) {
+    if (req.method !== "POST") {
+      sendError(res, 405, "Método não permitido.");
+      return;
+    }
+    if (!isLoopbackRequest(req)) {
+      sendError(
+        res,
+        403,
+        "O reset de senha só funciona no computador que roda o proxy.",
+        { code: "reset_local_only" },
+      );
+      return;
+    }
+    const body = await readJsonBody(req, 8 * 1024);
+    if (body.confirm !== "RESETAR") {
+      sendError(res, 400, "Confirmação inválida. Digite RESETAR para continuar.");
+      return;
+    }
+    resetAdminPassword();
+    adminSessions.clear();
+    loginFailures.clear();
+    sendJson(res, 200, { ok: true, initialized: false });
+    return;
+  }
+
   if (section === "logout" && !action) {
     revokeAdminSession(sessionTokenFrom(req));
     sendJson(res, 200, { ok: true });
@@ -1828,6 +2091,32 @@ async function handleAdmin(req, res, url) {
   if (req.method === "POST" && section === "proxy-token" && action === "rotate") {
     const token = rotateProxyToken();
     sendJson(res, 200, { proxyToken: token });
+    return;
+  }
+
+  if (section === "update") {
+    if (req.method === "GET" && !action) {
+      const force = url.searchParams.get("force") === "1";
+      const status = await checkForUpdates({ force });
+      sendJson(res, status.ok ? 200 : 200, status);
+      return;
+    }
+
+    if (req.method === "POST" && action === "apply") {
+      try {
+        const result = await applyUpdate();
+        sendJson(res, 200, result);
+        if (result.updated) {
+          scheduleRestart(1500);
+        }
+      } catch (error) {
+        const status = error?.status ?? 500;
+        sendError(res, status, error?.message ?? "Falha ao aplicar atualização.");
+      }
+      return;
+    }
+
+    sendError(res, 405, "Método não permitido.");
     return;
   }
 

@@ -45,6 +45,7 @@ const els = {
   gateSubtitle: $("#gateSubtitle"),
   gateSubmit: $("#gateSubmit"),
   gateForgot: $("#gateForgot"),
+  gateReset: $("#gateReset"),
   setupFields: $("#setupFields"),
   loginFields: $("#loginFields"),
   setupPassword: $("#setupPassword"),
@@ -137,8 +138,174 @@ const els = {
   confirmMessage: $("#confirmMessage"),
   confirmOk: $("#confirmOk"),
   confirmCancel: $("#confirmCancel"),
-  steps: $$("#steps .step"),
+  steps: $("#steps .step"),
+  updateDialog: $("#updateDialog"),
+  updateBadge: $("#updateBadge"),
+  updateTitle: $("#updateTitle"),
+  updateMessage: $("#updateMessage"),
+  updateMeta: $("#updateMeta"),
+  updateNotesWrap: $("#updateNotesWrap"),
+  updateNotes: $("#updateNotes"),
+  updateProgress: $("#updateProgress"),
+  updateProgressText: $("#updateProgressText"),
+  updateError: $("#updateError"),
+  updateActions: $("#updateActions"),
+  updateLaterBtn: $("#updateLaterBtn"),
+  updateReleaseBtn: $("#updateReleaseBtn"),
+  updateNowBtn: $("#updateNowBtn"),
 };
+
+
+/* ---------- update ---------- */
+
+const UPDATE_DISMISS_KEY = "deepai-proxy-update-dismissed";
+let updateCheckPromise = null;
+let pendingUpdateVersion = null;
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function showUpdateDialog(data) {
+  if (!els.updateDialog) return;
+  const current = data.currentVersion || "?";
+  const latest = data.latestVersion || "?";
+  const release = data.release || {};
+  pendingUpdateVersion = latest;
+
+  els.updateBadge.textContent = "Atualização disponível";
+  els.updateTitle.textContent = `Nova versão v${latest}`;
+  els.updateMessage.textContent =
+    "Uma nova versão do proxy está disponível no GitHub. A atualização é opcional — se quiser, você pode continuar na versão atual.";
+  els.updateMeta.innerHTML = `
+    <span class="pill">Atual: <strong>v${escapeHtml(current)}</strong></span>
+    <span class="pill">Nova: <strong>v${escapeHtml(latest)}</strong></span>
+  `;
+
+  const notes = String(release.notes || "").trim();
+  els.updateNotes.textContent = notes;
+  els.updateNotesWrap.classList.toggle("hidden", !notes);
+
+  const url = release.url || (data.repo ? `https://github.com/${data.repo}` : "");
+  if (url) {
+    els.updateReleaseBtn.href = url;
+    els.updateReleaseBtn.classList.remove("hidden");
+  } else {
+    els.updateReleaseBtn.removeAttribute("href");
+    els.updateReleaseBtn.classList.add("hidden");
+  }
+
+  els.updateError.textContent = "";
+  els.updateError.classList.add("hidden");
+  els.updateProgress.classList.add("hidden");
+  els.updateProgressText.textContent = "Atualizando...";
+  els.updateActions.classList.remove("hidden");
+  els.updateNowBtn.disabled = false;
+  els.updateLaterBtn.disabled = false;
+  els.updateNowBtn.classList.remove("hidden");
+  els.updateLaterBtn.textContent = "Depois";
+  els.updateNowBtn.textContent = "Atualizar agora";
+
+  if (!els.updateDialog.open) els.updateDialog.showModal();
+}
+
+async function waitForServerAndReload() {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const res = await fetch("/health", { cache: "no-store" });
+      if (res.ok) {
+        els.updateProgressText.textContent = "Servidor reiniciado. Recarregando...";
+        setTimeout(() => window.location.reload(), 600);
+        return;
+      }
+    } catch {
+      // still restarting
+    }
+  }
+  els.updateProgressText.textContent =
+    "O servidor demorou para voltar. Recarregue a página manualmente.";
+  els.updateActions.classList.remove("hidden");
+  els.updateNowBtn.classList.add("hidden");
+  els.updateLaterBtn.textContent = "Fechar";
+  els.updateLaterBtn.disabled = false;
+}
+
+async function applyUpdate() {
+  if (!state.sessionToken) return;
+  els.updateError.textContent = "";
+  els.updateError.classList.add("hidden");
+  els.updateActions.classList.add("hidden");
+  els.updateProgress.classList.remove("hidden");
+  els.updateProgressText.textContent = "Baixando atualização do GitHub...";
+  els.updateNowBtn.disabled = true;
+  els.updateLaterBtn.disabled = true;
+
+  try {
+    const result = await adminFetch("/admin/api/update/apply", { method: "POST" });
+    if (!result?.updated) {
+      els.updateProgress.classList.add("hidden");
+      els.updateActions.classList.remove("hidden");
+      els.updateNowBtn.disabled = false;
+      els.updateLaterBtn.disabled = false;
+      toast("info", result?.message || "O proxy já está atualizado.");
+      return;
+    }
+    localStorage.removeItem(UPDATE_DISMISS_KEY);
+    els.updateProgressText.textContent = "Atualização aplicada. Reiniciando o servidor...";
+    await waitForServerAndReload();
+  } catch (err) {
+    els.updateProgress.classList.add("hidden");
+    els.updateActions.classList.remove("hidden");
+    els.updateNowBtn.disabled = false;
+    els.updateLaterBtn.disabled = false;
+    els.updateError.textContent = err.message || "Falha ao atualizar.";
+    els.updateError.classList.remove("hidden");
+  }
+}
+
+async function checkForUpdates({ force = false, silent = true } = {}) {
+  if (!state.sessionToken) return null;
+  if (updateCheckPromise) return updateCheckPromise;
+
+  updateCheckPromise = (async () => {
+    try {
+      const qs = force ? "?force=1" : "";
+      const data = await adminFetch(`/admin/api/update${qs}`);
+      if (data?.hasUpdate) {
+        const dismissed = localStorage.getItem(UPDATE_DISMISS_KEY) || "";
+        if (force || dismissed !== data.latestVersion) {
+          showUpdateDialog(data);
+        }
+      } else if (force && !silent) {
+        toast("success", data?.error ? `Não foi possível verificar: ${data.error}` : "Você já está na versão mais recente.");
+      } else if (!force && data?.error && !silent) {
+        toast("error", data.error);
+      }
+      return data;
+    } catch (err) {
+      if (!silent) toast("error", err.message || "Falha ao verificar atualização.");
+      return null;
+    } finally {
+      updateCheckPromise = null;
+    }
+  })();
+
+  return updateCheckPromise;
+}
+
+function dismissUpdateDialog() {
+  if (pendingUpdateVersion) {
+    localStorage.setItem(UPDATE_DISMISS_KEY, pendingUpdateVersion);
+  }
+  if (els.updateDialog?.open) els.updateDialog.close();
+}
 
 /* ---------- boot ---------- */
 
@@ -158,6 +325,7 @@ async function init() {
     hideGate();
     restorePendingLogin();
     applyTab(initialTab(), { persist: false });
+    checkForUpdates({ silent: true });
   } catch {
     await showGate();
   }
@@ -457,6 +625,40 @@ async function submitGate(event) {
   }
 }
 
+async function resetPasswordFromGate() {
+  const confirmed = await confirmAction({
+    title: "Resetar senha de administrador?",
+    message:
+      "A senha atual será apagada e você poderá criar uma nova em seguida. As sessões abertas serão encerradas. Isso só funciona no computador que roda o proxy.",
+    confirmLabel: "Resetar senha",
+  });
+  if (!confirmed) return;
+
+  els.gateError.textContent = "";
+  els.gateReset.disabled = true;
+  try {
+    const response = await fetch("/admin/api/reset-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: "RESETAR" }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Não foi possível resetar a senha.");
+    }
+    state.sessionToken = "";
+    localStorage.removeItem(STORAGE_KEY);
+    setGateMode("setup");
+    els.gateSubtitle.textContent =
+      "Senha anterior apagada. Crie uma nova senha de administrador.";
+    toast("success", "Senha resetada. Crie uma nova agora.");
+  } catch (error) {
+    els.gateError.textContent = error.message;
+  } finally {
+    els.gateReset.disabled = false;
+  }
+}
+
 async function activateSession(token) {
   state.sessionToken = token;
   localStorage.setItem(STORAGE_KEY, token);
@@ -467,6 +669,7 @@ async function activateSession(token) {
   hideGate();
   restorePendingLogin();
   applyTab(initialTab(), { persist: false });
+  checkForUpdates({ silent: true });
 }
 
 function generateStrongPassword() {
@@ -2110,7 +2313,14 @@ function confirmAction({ title, message, confirmLabel = "Confirmar" }) {
 /* ---------- eventos ---------- */
 
 function bindEvents() {
+  els.updateLaterBtn?.addEventListener("click", dismissUpdateDialog);
+  els.updateNowBtn?.addEventListener("click", applyUpdate);
+  els.updateDialog?.addEventListener("cancel", (e) => {
+    // allow closing with Esc as "later"
+    if (pendingUpdateVersion) localStorage.setItem(UPDATE_DISMISS_KEY, pendingUpdateVersion);
+  });
   els.gateForm.addEventListener("submit", submitGate);
+  els.gateReset.addEventListener("click", resetPasswordFromGate);
   els.lockBtn.addEventListener("click", lock);
   els.startBtn.addEventListener("click", startLogin);
 
