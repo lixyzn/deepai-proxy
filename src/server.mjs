@@ -57,10 +57,12 @@ const PORT = Number(process.env.PORT || 8790);
 const VERSION = "0.3.0";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const CHECK_IN_INTERVAL_MS = 10 * 60 * 1000;
-const UPSTREAM_TIMEOUT_MS = Math.max(
-  30_000,
-  Number(process.env.UPSTREAM_TIMEOUT_MS || 20 * 60 * 1000),
-);
+// Upstream timeouts matching DeepAI Code Desktop official:
+// - Idle timeout: 330s (reset on each SSE chunk)
+// - Total timeout: 930s (hard limit)
+const DEEPAI_IDLE_TIMEOUT_MS = 330_000;
+const DEEPAI_TOTAL_TIMEOUT_MS = 930_000;
+const UPSTREAM_TIMEOUT_MS = DEEPAI_TOTAL_TIMEOUT_MS;
 
 const execFile = promisify(execFileCb);
 const UPDATE_REPO = process.env.DEEPAI_UPDATE_REPO || "lixyzn/deepai-proxy";
@@ -732,7 +734,7 @@ function resolveModelId(account, value) {
   const raw = String(value ?? "").replace(/^deepai\//, "").trim();
   if (!raw) return raw;
   const cached = modelCache.get(account.id);
-  if (!cached) return resolveModelAlias(raw);
+  if (!cached) return resolveModelAlias(raw, account, cached);
   const lower = raw.toLowerCase();
   const found = cached.data.data.find(
     (model) =>
@@ -743,7 +745,7 @@ function resolveModelId(account, value) {
   if (found) return found.slug;
   // Só usa alias quando o id pedido não existe no catálogo real, para nunca
   // trocar um modelo pago existente por outro.
-  return resolveModelAlias(raw);
+  return resolveModelAlias(raw, account, cached);
 }
 
 // Aquece o catálogo da conta ativa para resolver ids/nomes já na primeira chamada.
@@ -762,7 +764,7 @@ const ENV_UPSTREAM_CONTEXT_CAP = Number(process.env.DEEPAI_UPSTREAM_CONTEXT_CAP)
 const DEFAULT_FREE_INPUT_CAP =
   Number.isFinite(ENV_UPSTREAM_CONTEXT_CAP) && ENV_UPSTREAM_CONTEXT_CAP >= 0
     ? ENV_UPSTREAM_CONTEXT_CAP
-    : 33000;
+    : 36500;
 const observedModelInputCap = new Map();
 
 function findCachedModelEntry(accountId, model) {
@@ -1425,10 +1427,12 @@ async function handleProxy(req, res, url) {
         );
       };
       let model = lookup(requested);
-      if (!model) {
-        const aliased = resolveModelAlias(requested);
-        if (aliased !== requested) model = lookup(aliased);
-      }
+            if (!model) {
+              const catalogAccount = accountCandidates(account, req)[0];
+              const cached = modelCache.get(catalogAccount.id);
+              const aliased = resolveModelAlias(requested, account, cached);
+              if (aliased !== requested) model = lookup(aliased);
+            }
       telemetry.record({
         accountId: account.id,
         endpoint: "models",
@@ -1581,12 +1585,12 @@ async function handleProxy(req, res, url) {
     const cw = contextWindowFor(account.id, resolvedModel);
     const modelMaxOut = maxOutputTokensFor(account.id, resolvedModel);
     const requestedMaxOut =
-      typeof payload?.max_tokens === "number" && Number.isFinite(payload.max_tokens)
-        ? payload.max_tokens
-        : typeof payload?.max_output_tokens === "number" &&
-            Number.isFinite(payload.max_output_tokens)
-          ? payload.max_output_tokens
-          : 0;
+          typeof payload?.max_tokens === "number" && Number.isFinite(payload.max_tokens)
+            ? payload.max_tokens
+            : typeof payload?.max_output_tokens === "number" &&
+                Number.isFinite(payload.max_output_tokens)
+              ? payload.max_output_tokens
+              : 0;
     const reserveTokens = Math.min(
       Math.floor(cw * 0.4),
       Math.max(COMPACTION_RESERVE_TOKENS, requestedMaxOut || modelMaxOut || 0),
@@ -1616,9 +1620,10 @@ async function handleProxy(req, res, url) {
       if (!res.writableEnded) controller.abort();
     });
 
+    // Total timeout (hard limit)
     const upstreamSignal = AbortSignal.any([
       controller.signal,
-      AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      AbortSignal.timeout(DEEPAI_TOTAL_TIMEOUT_MS),
     ]);
     const candidates = accountCandidates(account, req);
     let upstream = null;
@@ -1626,115 +1631,125 @@ async function handleProxy(req, res, url) {
 
     for (let index = 0; index < candidates.length; index += 1) {
       const candidate = candidates[index];
+      // SEMPRE faz check-in antes de cada tentativa (match official behavior)
       await ensureCheckIn(candidate);
 
-      // A chave é a mesma para qualquer conta/candidato. O failover não
-      // derruba a identidade da conversa nem o cache lógico do cliente.
+      // Usa prompt_cache_key do cliente se fornecido, senão fallback para identity.key
+      const clientCacheKey = String(
+    req.headers["x-session-affinity"] ??
+    req.headers["x-session-id"] ??
+    req.headers["session-id"] ??
+    payload?.prompt_cache_key ??
+    conversation.sessionId
+      ).trim();
+
       const affinityHeaders = {
-        "X-Session-Affinity": conversation.sessionId,
+    "X-Session-Affinity": clientCacheKey,
       };
 
       const busyStartedAt = Date.now();
       for (let busyAttempt = 0; ; busyAttempt += 1) {
-        try {
-          upstream = await forwardModelRequest(
-            url.pathname === "/v1/chat/completions"
-              ? "/chat/completions"
-              : "/responses",
-            accountSecret(candidate),
-            {
-              method: "POST",
-              body: JSON.stringify(payload),
-              headers: affinityHeaders,
-              signal: upstreamSignal,
-            },
-          );
-        } catch (error) {
-        if (controller.signal.aborted) {
-          telemetry.record({
-            accountId: candidate.id,
-            endpoint,
-            model,
-            status: 499,
-            durationMs: performance.now() - startedAt,
-            error: "Cliente desconectou antes da resposta.",
-          });
-          return;
-        }
-        const timedOut =
-          error?.name === "TimeoutError" || error?.name === "AbortError";
-        const status = timedOut ? 504 : error.status || 502;
+    try {
+      upstream = await forwardModelRequest(
+        url.pathname === "/v1/chat/completions"
+          ? "/chat/completions"
+          : "/responses",
+        accountSecret(candidate),
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+          headers: affinityHeaders,
+          signal: upstreamSignal,
+        },
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
         telemetry.record({
           accountId: candidate.id,
           endpoint,
           model,
-          status,
+          status: 499,
           durationMs: performance.now() - startedAt,
-          error: timedOut
-            ? "A DeepAI não respondeu dentro do tempo limite."
-            : error instanceof Error
-              ? error.message
-              : "falha de conexão",
+          error: "Cliente desconectou antes da resposta.",
         });
-        if (timedOut) {
-          sendError(res, 504, "A DeepAI não respondeu dentro do tempo limite.", {
-            code: "upstream_timeout",
-          });
-          return;
-        }
-        sendUpstreamError(res, error);
         return;
-        }
+      }
+      const timedOut =
+        error?.name === "TimeoutError" || error?.name === "AbortError";
+      const status = timedOut ? 504 : error.status || 502;
+      telemetry.record({
+        accountId: candidate.id,
+        endpoint,
+        model,
+        status,
+        durationMs: performance.now() - startedAt,
+        error: timedOut
+          ? "A DeepAI não respondeu dentro do tempo limite."
+          : error instanceof Error
+            ? error.message
+            : "falha de conexão",
+      });
+      if (timedOut) {
+        sendError(res, 504, "A DeepAI não respondeu dentro do tempo limite.", {
+          code: "upstream_timeout",
+        });
+        return;
+      }
+      sendUpstreamError(res, error);
+      return;
+    }
 
-        if (
-          (await sessionBusy(upstream)) &&
-          busyAttempt < 3 &&
-          Date.now() - busyStartedAt < 30_000
-        ) {
-          const retryAfter = Number(upstream.headers.get("retry-after"));
-          const delay = Number.isFinite(retryAfter)
-            ? Math.min(30_000, Math.max(1_000, retryAfter * 1000))
-            : 2_000;
-          await upstream.body?.cancel().catch(() => {});
-          try {
-            await sleep(delay, controller.signal);
-          } catch {
-            telemetry.record({
-              accountId: candidate.id,
-              endpoint,
-              model,
-              status: 499,
-              durationMs: performance.now() - startedAt,
-              error: "Cliente desconectou antes da resposta.",
-            });
-            return;
-          }
-          continue;
-        }
-        break;
+    // Retry ONLY on 409 session_busy (match official waitForDeepAICapacity)
+    if (
+      upstream.status === 409 &&
+      (await sessionBusy(upstream)) &&
+      busyAttempt < 3 &&
+      Date.now() - busyStartedAt < 30_000
+    ) {
+      const retryAfter = Number(upstream.headers.get("retry-after"));
+      const delay = Number.isFinite(retryAfter)
+        ? Math.min(30_000, Math.max(1_000, retryAfter * 1000))
+        : 2_000;
+      await upstream.body?.cancel().catch(() => {});
+      try {
+        await sleep(delay, controller.signal);
+      } catch {
+        telemetry.record({
+          accountId: candidate.id,
+          endpoint,
+          model,
+          status: 499,
+          durationMs: performance.now() - startedAt,
+          error: "Cliente desconectou antes da resposta.",
+        });
+        return;
+      }
+      continue;
+    }
+    break;
       }
 
       if (RETRYABLE_UPSTREAM_STATUS.has(upstream.status)) {
-        const errorBody = await upstream
-          .clone()
-          .json()
-          .catch(() => null);
-        markAccountCooldown(
-          candidate,
-          upstream.status,
-          upstream.headers.get("retry-after"),
-          errorBody,
-        );
-        if (index < candidates.length - 1) {
-          lastFailure = await upstreamFailure(upstream);
-          await upstream.body?.cancel().catch(() => {});
-          continue;
-        }
+    const errorBody = await upstream
+      .clone()
+      .json()
+      .catch(() => null);
+    markAccountCooldown(
+      candidate,
+      upstream.status,
+      upstream.headers.get("retry-after"),
+      errorBody,
+    );
+    if (index < candidates.length - 1) {
+      lastFailure = await upstreamFailure(upstream);
+      await upstream.body?.cancel().catch(() => {});
+      continue;
+    }
       }
 
       account = candidate;
       if (!RETRYABLE_UPSTREAM_STATUS.has(upstream.status)) {
-        clearAccountCooldown(candidate);
+    clearAccountCooldown(candidate);
       }
       break;
     }
@@ -1742,9 +1757,9 @@ async function handleProxy(req, res, url) {
     if (!upstream) {
       if (lastFailure) sendUpstreamError(res, lastFailure);
       else {
-        sendError(res, 502, "Nenhuma conta conseguiu concluir a requisição.", {
-          code: "no_account_available",
-        });
+    sendError(res, 502, "Nenhuma conta conseguiu concluir a requisição.", {
+      code: "no_account_available",
+    });
       }
       return;
     }
@@ -1760,19 +1775,19 @@ async function handleProxy(req, res, url) {
       upstream.body
     ) {
       await collectChatCompletionStream(
-        upstream,
-        res,
-        {
-          accountId: account.id,
-          endpoint,
-          model,
-          sessionId: conversation.sessionId,
-          sentEstTokens,
-          startedAt,
-          signal: controller.signal,
-          theos: upstream.status < 400 ? theos : null,
-        },
-        model,
+    upstream,
+    res,
+    {
+      accountId: account.id,
+      endpoint,
+      model,
+      sessionId: conversation.sessionId,
+      sentEstTokens,
+      startedAt,
+      signal: controller.signal,
+      theos: upstream.status < 400 ? theos : null,
+    },
+    model,
       );
       return;
     }
@@ -1782,21 +1797,21 @@ async function handleProxy(req, res, url) {
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
       ...(upstream.headers.has("retry-after")
-        ? { "Retry-After": upstream.headers.get("retry-after") }
-        : {}),
+    ? { "Retry-After": upstream.headers.get("retry-after") }
+    : {}),
       ...(upstream.headers.has("x-request-id")
-        ? { "X-Request-Id": upstream.headers.get("x-request-id") }
-        : {}),
+    ? { "X-Request-Id": upstream.headers.get("x-request-id") }
+    : {}),
     });
 
     if (!upstream.body) {
       telemetry.record({
-        accountId: account.id,
-        endpoint,
-        model,
-        status: upstream.status,
-        durationMs: performance.now() - startedAt,
-        error: upstream.status >= 400 ? "Sem corpo de resposta." : null,
+    accountId: account.id,
+    endpoint,
+    model,
+    status: upstream.status,
+    durationMs: performance.now() - startedAt,
+    error: upstream.status >= 400 ? "Sem corpo de resposta." : null,
       });
       res.end();
       return;
@@ -1813,10 +1828,10 @@ async function handleProxy(req, res, url) {
       theos: upstream.status < 400 ? theos : null,
     });
     return;
-  }
+      }
 
-  sendError(res, 404, "Rota de API não encontrada.", { code: "not_found" });
-}
+      sendError(res, 404, "Rota de API não encontrada.", { code: "not_found" });
+    }
 
 function sendUpstreamError(res, error) {
   if (error instanceof DeepAIError) {

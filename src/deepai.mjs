@@ -24,8 +24,7 @@ function resolveDeepAIOrigin() {
 
 export const DEEPAI_ORIGIN = resolveDeepAIOrigin();
 export const DEEPAI_MODEL_BASE = `${DEEPAI_ORIGIN}/deepai_code`;
-const LANE_VERSION = "7";
-const INSTANCE_ID = randomBytes(16).toString("hex");
+const LANE_VERSION = process.env.DEEPAI_LANE_VERSION || "7";
 const MACHINE_HEADER = "X-DeepAI-Code-Machine";
 const CHECK_IN_HEADER = "X-DeepAI-Code-Check-In";
 const BEACON_HEADER = "X-DeepAI-Code-Beacon";
@@ -114,13 +113,21 @@ export function machineHash() {
   return machinePromise;
 }
 
+function fallbackMachineId() {
+  // Deterministic fallback based on process identity - same across restarts
+  return createHash("sha256")
+    .update(`deepai-proxy-${process.platform}-${process.arch}-${process.pid}`)
+    .digest("hex");
+}
+
 export async function deepAIHeaders(apiKey, extra = {}) {
   const machine = await machineHash();
+  const machineId = machine ?? fallbackMachineId();
   return {
     "Content-Type": "application/json",
     "X-DeepAI-Code-Theos": LANE_VERSION,
-    "X-DeepAI-Code-Instance": INSTANCE_ID,
-    ...(machine ? { [MACHINE_HEADER]: machine } : {}),
+    "X-DeepAI-Code-Instance": randomBytes(16).toString("hex"),
+    "X-DeepAI-Code-Machine": machineId,
     ...(apiKey ? { "Api-Key": apiKey } : {}),
     ...extra,
   };
