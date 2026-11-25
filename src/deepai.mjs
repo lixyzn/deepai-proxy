@@ -1,406 +1,470 @@
-import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { execFile, execFileSync } from "node:child_process";
+import os from "node:os";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const PRODUCTION_ORIGIN = "https://api.deepai.org";
+export const DEEPAI_ORIGIN = process.env.DEEPAI_ORIGIN || "https://api.deepai.org";
+export const DEEPAI_MODEL_BASE = `${DEEPAI_ORIGIN}/deepai_code`;
+export const DESKTOP_AUTH_URL = `${DEEPAI_ORIGIN}/deepai_code/desktop_auth/`;
 
-function resolveDeepAIOrigin() {
-  if (process.env.DEEPAI_PROXY_LOCAL_TEST !== "true") return PRODUCTION_ORIGIN;
-  const origin = process.env.DEEPAI_PROXY_DEV_API_ORIGIN?.trim() ?? "";
-  if (!/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(origin)) {
-    throw new Error(
-      "DEEPAI_PROXY_LOCAL_TEST=true exige DEEPAI_PROXY_DEV_API_ORIGIN=http://127.0.0.1:<porta>.",
-    );
+const REQUEST_TIMEOUT_MS = 20_000;
+const MAX_BODY_BYTES = 256 * 1024;
+const MAX_EXCHANGE_RETRIES = 2;
+const INSTANCE_ID = randomBytes(16).toString("hex");
+
+let cachedMachineHash = null;
+
+export function getMachineHash() {
+  if (cachedMachineHash) return cachedMachineHash;
+  let seed = "";
+  if (process.platform === "win32") {
+    // Prefer the SMBIOS UUID, which is what the official desktop client hashes.
+    try {
+      const out = execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "(Get-CimInstance Win32_ComputerSystemProduct).UUID",
+        ],
+        { encoding: "utf8", timeout: 5000, windowsHide: true },
+      );
+      const uuid = String(out || "").trim();
+      if (uuid && !/^0{8}-0{4}-0{4}-0{4}-0{12}$/i.test(uuid) && !/^ffffffff/i.test(uuid)) {
+        seed = uuid;
+      }
+    } catch {
+      // fall back below
+    }
+    if (!seed) {
+      try {
+        const out = execFileSync(
+          "reg",
+          ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"],
+          { encoding: "utf8", timeout: 2000, windowsHide: true },
+        );
+        const match = /MachineGuid\s+REG_SZ\s+([^\r\n]+)/i.exec(out);
+        if (match?.[1]) seed = match[1].trim();
+      } catch {
+        // fall back below
+      }
+    }
   }
-  const url = new URL(origin);
-  if (url.origin !== origin || Number(url.port) > 65535) {
-    throw new Error("A origem local de teste da DeepAI é inválida.");
+  if (!seed) {
+    seed = `${os.hostname()}:${os.platform()}:${os.arch()}:${os.userInfo().username}`;
   }
-  return origin;
+  cachedMachineHash = createHash("sha256").update(seed, "utf8").digest("hex");
+  return cachedMachineHash;
 }
 
-export const DEEPAI_ORIGIN = resolveDeepAIOrigin();
-export const DEEPAI_MODEL_BASE = `${DEEPAI_ORIGIN}/deepai_code`;
-const LANE_VERSION = process.env.DEEPAI_LANE_VERSION || "7";
-const MACHINE_HEADER = "X-DeepAI-Code-Machine";
-const CHECK_IN_HEADER = "X-DeepAI-Code-Check-In";
-const BEACON_HEADER = "X-DeepAI-Code-Beacon";
-const UUID =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-const SMBIOS_PLACEHOLDERS = new Set([
-  "00000000-0000-0000-0000-000000000000",
-  "ffffffff-ffff-ffff-ffff-ffffffffffff",
-  "03000200-0400-0500-0006-000700080009",
-]);
+export function buildDeepAIHeaders(account, extraHeaders = {}) {
+  const apiKey =
+    typeof account === "string"
+      ? account.trim()
+      : String(account?.apiKey || account?.tokens?.accessToken || "").trim();
+  const cookie = typeof account === "object" && account?.cookie ? String(account.cookie).trim() : "";
+
+  const headers = {
+    "X-DeepAI-Code-Theos": "8",
+    "X-DeepAI-Code-Instance": INSTANCE_ID,
+    "X-DeepAI-Code-Machine": getMachineHash(),
+    ...extraHeaders,
+  };
+
+  if (apiKey) {
+    headers["api-key"] = apiKey;
+  }
+  if (cookie) {
+    headers["Cookie"] = cookie;
+  }
+
+  return headers;
+}
 
 export class DeepAIError extends Error {
-  constructor(message, status = 502, body = undefined) {
+  constructor(message, status = 502, code = "deepai_error", details = null) {
     super(message);
     this.name = "DeepAIError";
     this.status = status;
-    this.body = body;
+    this.code = code;
+    this.details = details;
   }
 }
 
-function parseUuid(output) {
-  const uuid = UUID.exec(String(output))?.[0]?.toLowerCase();
-  return uuid && !SMBIOS_PLACEHOLDERS.has(uuid) ? uuid : null;
+function isRetryableError(err) {
+  if (!err) return false;
+  if (err instanceof DeepAIError) return err.status >= 500;
+  if (err.name === "AbortError" || err.name === "TimeoutError") return true;
+  const code = String(err.code || err.cause?.code || "").toUpperCase();
+  return ["ECONNRESET", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH"].includes(code);
 }
 
-async function run(file, args, timeout = 8000) {
+function isWin() {
+  return process.platform === "win32";
+}
+
+function psQuote(s) {
+  return `'${String(s).replace(/'/g, "''")}'`;
+}
+
+function parsePsJson(stdout, label) {
+  const text = String(stdout || "").trim().replace(/^\uFEFF/, "");
+  if (!text) throw new Error(`${label} PowerShell response was empty`);
   try {
-    const { stdout } = await execFileAsync(file, args, {
-      encoding: "utf8",
-      timeout,
-      windowsHide: true,
-    });
-    return stdout;
+    return JSON.parse(text);
   } catch {
-    return "";
+    throw new Error(`${label} PowerShell response was not JSON: ${text.slice(0, 300)}`);
   }
 }
 
-async function detectMachineId() {
-  if (process.platform === "win32") {
-    const smbios = await run("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "(Get-CimInstance Win32_ComputerSystemProduct).UUID",
-    ]);
-    const fromSmbios = parseUuid(smbios);
-    if (fromSmbios) return fromSmbios;
+async function requestViaPowerShell(url, { method = "GET", headers = {}, body = null, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+  const timeoutSec = Math.max(5, Math.ceil(timeoutMs / 1000));
+  const headerEntries = Object.entries(headers)
+    .filter(([, v]) => v !== undefined && v !== null)
+    .map(([k, v]) => `$headers[${psQuote(k)}] = ${psQuote(String(v))}`);
 
-    const registry = await run("reg", [
-      "query",
-      "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
-      "/v",
-      "MachineGuid",
-    ]);
-    const fromRegistry = /MachineGuid\s+REG_SZ\s+(\S+)/.exec(registry)?.[1];
-    if (fromRegistry && UUID.test(fromRegistry)) {
-      return fromRegistry.toLowerCase();
-    }
-    return null;
+  const scriptParts = [
+    "$ErrorActionPreference = 'Stop'",
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$headers = @{}",
+    ...headerEntries,
+  ];
+
+  let invokeCmd = `$resp = Invoke-WebRequest -UseBasicParsing -Uri ${psQuote(url)} -Method ${psQuote(method)} -Headers $headers -TimeoutSec ${timeoutSec}`;
+  if (body !== null && body !== undefined) {
+    const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
+    scriptParts.push(`$body = ${psQuote(bodyStr)}`);
+    invokeCmd += " -ContentType 'application/json' -Body $body";
   }
 
-  if (process.platform === "darwin") {
-    const output = await run("ioreg", [
-      "-rd1",
-      "-c",
-      "IOPlatformExpertDevice",
-    ]);
-    return /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(output)?.[1]?.toLowerCase() ?? null;
-  }
-
-  for (const file of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
-    const value = await readFile(file, "utf8").catch(() => "");
-    const id = value.trim().toLowerCase();
-    if (/^[0-9a-f]{32}$/.test(id) && !/^0+$/.test(id)) return id;
-  }
-  return null;
-}
-
-let machinePromise;
-
-export function machineHash() {
-  machinePromise ??= detectMachineId().then((raw) =>
-    raw ? createHash("sha256").update(raw).digest("hex") : null,
+  scriptParts.push(
+    "try {",
+    `  ${invokeCmd}`,
+    "  $status = [int]$resp.StatusCode",
+    "  $content = [string]$resp.Content",
+    "} catch [System.Net.WebException] {",
+    "  $errResp = $_.Exception.Response",
+    "  if ($null -eq $errResp) { throw }",
+    "  $status = [int]$errResp.StatusCode",
+    "  $reader = New-Object System.IO.StreamReader($errResp.GetResponseStream())",
+    "  $content = $reader.ReadToEnd()",
+    "  $reader.Close()",
+    "}",
+    "$obj = [ordered]@{ status = $status; body = $content }",
+    "[Console]::Out.Write(($obj | ConvertTo-Json -Compress -Depth 8))",
   );
-  return machinePromise;
-}
 
-function fallbackMachineId() {
-  // Deterministic fallback based on process identity - same across restarts
-  return createHash("sha256")
-    .update(`deepai-proxy-${process.platform}-${process.arch}-${process.pid}`)
-    .digest("hex");
-}
-
-export async function deepAIHeaders(apiKey, extra = {}) {
-  const machine = await machineHash();
-  const machineId = machine ?? fallbackMachineId();
-  return {
-    "Content-Type": "application/json",
-    "X-DeepAI-Code-Theos": LANE_VERSION,
-    "X-DeepAI-Code-Instance": randomBytes(16).toString("hex"),
-    "X-DeepAI-Code-Machine": machineId,
-    ...(apiKey ? { "Api-Key": apiKey } : {}),
-    ...extra,
-  };
-}
-
-function errorMessageFromBody(body, fallback) {
-  if (body && typeof body === "object") {
-    if (typeof body.error === "string") return body.error;
-    if (body.error && typeof body.error.message === "string") {
-      return body.error.message;
-    }
-    if (typeof body.message === "string") return body.message;
-  }
-  return fallback;
-}
-
-export async function exchangeCode(code, { signal } = {}) {
-  const response = await fetch(`${DEEPAI_MODEL_BASE}/desktop_auth/exchange/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-    redirect: "error",
-    signal: signal
-      ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
-      : AbortSignal.timeout(20000),
-  }).catch((error) => {
-    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
-      throw new DeepAIError(
-        "A DeepAI não respondeu a tempo. Tente gerar um novo link.",
-        504,
-      );
-    }
-    throw new DeepAIError(
-      "Não foi possível falar com a DeepAI. Verifique a conexão e tente novamente.",
-      502,
-    );
-  });
-
-  const body = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message =
-      response.status === 400 || response.status === 401
-        ? "Este código de login expirou ou já foi usado. Gere um novo link."
-        : response.status === 429
-          ? "Muitas tentativas de login. Aguarde um pouco e tente de novo."
-          : errorMessageFromBody(
-              body,
-              "A DeepAI não concluiu o login agora. Tente novamente.",
-            );
-    throw new DeepAIError(message, response.status, body);
-  }
-
-  const apiKey = body?.api_key;
-  if (typeof apiKey !== "string" || !apiKey || /[\r\n]/.test(apiKey)) {
-    throw new DeepAIError(
-      "A DeepAI devolveu uma resposta de login inválida. Tente novamente.",
-      502,
-      body,
-    );
-  }
-
-  return {
-    apiKey,
-    username: typeof body.username === "string" ? body.username : "",
-    isPro: body.is_pro === true,
-  };
-}
-
-async function requestJson(pathname, apiKey, { signal, method = "GET", body, headers = {} } = {}) {
-  const response = await fetch(`${DEEPAI_MODEL_BASE}${pathname}`, {
-    method,
-    headers: await deepAIHeaders(apiKey, headers),
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    redirect: "error",
-    signal,
-  }).catch((error) => {
-    if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
-    throw new DeepAIError(
-      "Falha de conexão com a DeepAI. Verifique a rede do proxy.",
-      502,
-    );
-  });
-
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new DeepAIError(
-      errorMessageFromBody(payload, `A DeepAI recusou a requisição (${response.status}).`),
-      response.status,
-      payload,
-    );
-  }
-  return payload;
-}
-
-export function fetchModels(apiKey, { signal } = {}) {
-  return requestJson("/models", apiKey, { signal });
-}
-
-/**
- * Plano/entitlement da conta. Fica na raiz da API, não em /deepai_code.
- * Não confundir com o saldo de Theos (/theos).
- */
-export async function fetchUsageSummary(apiKey, { signal } = {}) {
-  const response = await fetch(`${DEEPAI_ORIGIN}/get_usage_summary`, {
-    method: "GET",
-    headers: await deepAIHeaders(apiKey),
-    redirect: "error",
-    signal,
-  }).catch((error) => {
-    if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
-    throw new DeepAIError(
-      "Falha de conexão com a DeepAI ao ler o plano da conta.",
-      502,
-    );
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new DeepAIError(
-      errorMessageFromBody(payload, `A DeepAI recusou a leitura do plano (${response.status}).`),
-      response.status,
-      payload,
-    );
-  }
-  return payload;
-}
-
-function summaryNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && /^-?\d+(?:\.\d+)?$/.test(value.trim())) {
-    return Number(value);
-  }
-  return null;
-}
-
-export function normalizeUsageSummary(payload) {
-  if (!payload || typeof payload !== "object") return null;
-  if (payload.is_authenticated !== true) return null;
-  if (typeof payload.is_pro !== "boolean") return null;
-  const credits = summaryNumber(payload.credits_remaining);
-  const overage = summaryNumber(payload.total_overage_cost);
-  return {
-    authenticated: true,
-    isPro: payload.is_pro,
-    ...(typeof payload.plan === "string" && payload.plan.trim()
-      ? { plan: payload.plan.trim().slice(0, 40) }
-      : {}),
-    ...(credits === null ? {} : { creditsRemaining: credits }),
-    ...(overage === null ? {} : { overageCost: overage }),
-    ...(typeof payload.has_overages === "boolean"
-      ? { hasOverages: payload.has_overages }
-      : {}),
-    ...(typeof payload.period_description === "string" &&
-    payload.period_description.trim()
-      ? { periodDescription: payload.period_description.trim().slice(0, 160) }
-      : {}),
-    checkedAt: new Date().toISOString(),
-  };
-}
-
-function allowanceAmount(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "string" && /^-?\d+(?:\.\d+)?$/.test(value.trim())) {
-    return value.trim();
-  }
-  return undefined;
-}
-
-export function normalizeAllowance(payload) {
-  if (!payload || typeof payload !== "object" || typeof payload.enabled !== "boolean") {
-    return null;
-  }
-  const balance = allowanceAmount(payload.balance);
-  const granted = allowanceAmount(payload.granted);
-  if (!payload.enabled && balance === undefined) return null;
-  return {
-    enabled: payload.enabled,
-    ...(balance === undefined ? {} : { balance }),
-    ...(granted === undefined ? {} : { granted }),
-    ...(typeof payload.refresh_at === "string"
-      ? { refreshAt: payload.refresh_at }
-      : {}),
-    checkedAt: new Date().toISOString(),
-  };
-}
-
-const checkInNonces = new Map();
-
-export async function checkIn(apiKey, accountKeyHash, { signal } = {}) {
-  const beacon = `v=0.3.0;up=${Math.floor(process.uptime())}`;
-  const nonce = checkInNonces.get(accountKeyHash);
-  const payload = await requestJson("/theos", apiKey, {
-    signal,
-    headers: {
-      [BEACON_HEADER]: beacon,
-      ...(nonce ? { [CHECK_IN_HEADER]: nonce } : {}),
-    },
-  });
-  const next = payload?.check_in;
-  if (
-    next &&
-    typeof next.nonce === "string" &&
-    /^[0-9a-f]{32}$/.test(next.nonce) &&
-    typeof next.seconds === "number" &&
-    next.seconds > 0
-  ) {
-    checkInNonces.set(accountKeyHash, next.nonce);
-  }
-  return payload;
-}
-
-/**
- * Transcrição de áudio. O app oficial usa multipart com o campo
- * `voiceRecording` e aceita webm/opus ou mp4; a resposta é { text }.
- */
-export async function transcribeAudio(
-  apiKey,
-  { data, mimeType = "audio/webm", filename = "rec.webm", signal } = {},
-) {
-  if (!data || data.length === 0) {
-    throw new DeepAIError("Áudio vazio.", 400);
-  }
-  if (data.length > 8 * 1024 * 1024) {
-    throw new DeepAIError("Áudio grande demais (máximo 8 MB).", 413);
-  }
-  if (!/^(audio\/webm(?:;codecs=opus)?|audio\/mp4)$/.test(mimeType)) {
-    throw new DeepAIError(
-      "Formato de áudio não suportado. Use webm/opus ou mp4.",
-      415,
-    );
-  }
-  const form = new FormData();
-  form.append("voiceRecording", new Blob([data], { type: mimeType }), filename);
-  const response = await fetch(`${DEEPAI_ORIGIN}/speech_to_text`, {
-    method: "POST",
-    headers: { "api-key": apiKey },
-    body: form,
-    redirect: "error",
-    signal,
-  }).catch((error) => {
-    if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
-    throw new DeepAIError("Falha de conexão com a DeepAI ao transcrever.", 502);
-  });
-  const text = await response.text().catch(() => "");
-  if (!response.ok) {
-    let body = null;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      // resposta não JSON
-    }
-    throw new DeepAIError(
-      errorMessageFromBody(body, `A DeepAI recusou a transcrição (${response.status}).`),
-      response.status,
-      body,
-    );
-  }
-  let payload;
   try {
-    payload = JSON.parse(text);
-  } catch {
-    throw new DeepAIError("A DeepAI devolveu uma transcrição inválida.", 502);
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", scriptParts.join("; ")],
+      { windowsHide: true, timeout: timeoutMs + 5000, maxBuffer: 2 * 1024 * 1024 },
+    );
+    const parsed = parsePsJson(stdout, `${method} ${url}`);
+    const text = typeof parsed.body === "string" ? parsed.body : JSON.stringify(parsed.body ?? "");
+    return { status: Number(parsed.status) || 0, text, headers: new Map() };
+  } catch (err) {
+    const detail = err.killed ? `timeout after ${timeoutMs}ms` : err.stderr || err.message || String(err);
+    throw new Error(`PowerShell fetch failed: ${String(detail).slice(0, 400)}`);
   }
-  if (!payload || typeof payload.text !== "string" || !payload.text.trim()) {
-    throw new DeepAIError("A DeepAI não devolveu texto na transcrição.", 502);
-  }
-  return payload.text.trim();
 }
 
-export async function forwardModelRequest(pathname, apiKey, init = {}) {
-  const headers = await deepAIHeaders(apiKey, init.headers ?? {});
-  return fetch(`${DEEPAI_MODEL_BASE}${pathname}`, {
-    ...init,
-    headers,
+async function readBodyLimited(res) {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore
+        }
+        throw new DeepAIError(`Response too large from DeepAI (>${MAX_BODY_BYTES} bytes)`, 502, "response_too_large");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  }
+  text += decoder.decode();
+  return text;
+}
+
+async function requestViaFetch(
+  url,
+  { method = "GET", headers = {}, body = null, signal = null, timeoutMs = REQUEST_TIMEOUT_MS, fetchImpl = fetch } = {},
+) {
+  const deadline = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+    : AbortSignal.timeout(timeoutMs);
+
+  const reqHeaders = { ...headers };
+  let reqBody = undefined;
+  if (body !== null && body !== undefined) {
+    if (!reqHeaders["Content-Type"] && !reqHeaders["content-type"]) {
+      reqHeaders["Content-Type"] = "application/json";
+    }
+    reqBody = typeof body === "string" ? body : JSON.stringify(body);
+  }
+
+  const res = await fetchImpl(url, {
+    method,
+    headers: reqHeaders,
+    body: reqBody,
+    signal: deadline,
     redirect: "error",
   });
+  const text = await readBodyLimited(res);
+  return { status: res.status, text, headers: res.headers };
+}
+
+async function requestJsonRaw(url, opts = {}) {
+  const useFetchOnly = opts.fetchImpl && opts.fetchImpl !== fetch;
+  const attempts = useFetchOnly
+    ? [() => requestViaFetch(url, opts)]
+    : isWin()
+      ? [() => requestViaFetch(url, opts), () => requestViaPowerShell(url, opts)]
+      : [() => requestViaFetch(url, opts)];
+
+  let lastErr;
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      return await attempts[i]();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts.length - 1 && isRetryableError(err)) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+export async function exchangeCode(codeOrOpts, maybeOpts = {}) {
+  let code;
+  let codeVerifier;
+  let signal;
+  let fetchImpl = fetch;
+
+  if (codeOrOpts && typeof codeOrOpts === "object") {
+    ({ code, codeVerifier, signal, fetchImpl = fetch } = codeOrOpts);
+  } else {
+    code = codeOrOpts;
+    ({ codeVerifier, signal, fetchImpl = fetch } = maybeOpts || {});
+  }
+
+  if (typeof code !== "string" || !code.trim()) {
+    throw new DeepAIError("Código de autorização ausente.", 400, "missing_code");
+  }
+  if (typeof codeVerifier !== "string" || !codeVerifier.trim()) {
+    throw new DeepAIError("Verificador de login ausente. Gere um novo link de login.", 400, "missing_code_verifier");
+  }
+
+  const url = `${DEEPAI_ORIGIN}/deepai_code/desktop_auth/exchange/`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= MAX_EXCHANGE_RETRIES; attempt++) {
+    try {
+      const { status, text } = await requestJsonRaw(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { code: code.trim(), code_verifier: codeVerifier.trim() },
+        signal,
+        fetchImpl,
+      });
+
+      if (status === 400 || status === 401) {
+        throw new DeepAIError(
+          "Esse link de login expirou ou já foi usado. Gere um novo link.",
+          401,
+          "invalid_exchange_code",
+        );
+      }
+      if (status === 429) {
+        throw new DeepAIError(
+          "O DeepAI está limitando logins agora. Aguarde alguns segundos e tente de novo.",
+          429,
+          "rate_limited",
+        );
+      }
+      if (status >= 500) {
+        throw new DeepAIError(
+          "O DeepAI não conseguiu concluir o login agora. Tente de novo em instantes.",
+          502,
+          "exchange_server_error",
+          { upstreamStatus: status },
+        );
+      }
+      if (status < 200 || status >= 300) {
+        throw new DeepAIError(
+          "O DeepAI não concluiu o login. Gere um novo link e tente de novo.",
+          401,
+          "exchange_failed",
+          { upstreamStatus: status },
+        );
+      }
+
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        throw new DeepAIError(
+          "DeepAI returned an invalid sign-in response. Please start sign-in again.",
+          502,
+          "invalid_exchange_response",
+        );
+      }
+
+      const apiKey =
+        (typeof data?.api_key === "string" && data.api_key.trim()) ||
+        (typeof data?.apiKey === "string" && data.apiKey.trim()) ||
+        (typeof data?.access_token === "string" && data.access_token.trim()) ||
+        "";
+
+      if (!apiKey) {
+        throw new DeepAIError(
+          "DeepAI returned an invalid sign-in response (missing api_key).",
+          502,
+          "missing_api_key",
+          data,
+        );
+      }
+
+      const username =
+        (typeof data?.username === "string" && data.username.trim()) ||
+        (typeof data?.user?.login === "string" && data.user.login.trim()) ||
+        (typeof data?.user?.username === "string" && data.user.username.trim()) ||
+        "";
+
+      const isPro = Boolean(
+        data?.is_pro === true ||
+          data?.isPro === true ||
+          data?.isProSubscription === true ||
+          data?.user?.is_pro === true,
+      );
+
+      // connect_token is optional and only present for some accounts. Accept it
+      // only when it matches the shape the desktop client expects.
+      const rawConnectToken = typeof data?.connect_token === "string" ? data.connect_token.trim() : "";
+      const connectToken = /^dc_[A-Za-z0-9_-]{43}$/.test(rawConnectToken) ? rawConnectToken : null;
+      const connectExpiresAt =
+        connectToken && typeof data?.connect_expires_at === "string" ? data.connect_expires_at : null;
+
+      return {
+        apiKey,
+        accessToken: apiKey,
+        refreshToken: typeof data?.refresh_token === "string" ? data.refresh_token : null,
+        username: username || null,
+        isPro,
+        connectToken,
+        connectExpiresAt,
+        raw: data,
+      };
+    } catch (error) {
+      lastError = error;
+      const retryable =
+        isRetryableError(error) || (error instanceof DeepAIError && error.code === "exchange_server_error");
+      if (!retryable || attempt >= MAX_EXCHANGE_RETRIES) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+    }
+  }
+
+  throw lastError;
+}
+
+export async function verifyAccount(account, { fetchImpl = fetch, timeoutMs = 15_000 } = {}) {
+  const apiKey = account?.apiKey || account?.tokens?.accessToken || "";
+  const cookie = account?.cookie || "";
+  if (!apiKey && !cookie) {
+    return {
+      ok: false,
+      valid: false,
+      isAuthenticated: false,
+      isPro: false,
+      status: 400,
+      error: "Conta não possui API key ou cookie configurado.",
+    };
+  }
+
+  const headers = buildDeepAIHeaders(account);
+  try {
+    const { status, text } = await requestJsonRaw(`${DEEPAI_ORIGIN}/get_usage_summary`, {
+      method: "GET",
+      headers,
+      timeoutMs,
+      fetchImpl,
+    });
+
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+
+    if (status === 401 || status === 403 || data?.is_authenticated === false) {
+      return {
+        ok: false,
+        valid: false,
+        isAuthenticated: false,
+        isPro: false,
+        status,
+        error: data?.error || "Chave ou sessão inválida/expirada.",
+      };
+    }
+
+    if (status >= 200 && status < 300) {
+      let theos = null;
+      try {
+        const theosRes = await requestJsonRaw(`${DEEPAI_MODEL_BASE}/theos`, {
+          method: "GET",
+          headers,
+          timeoutMs,
+          fetchImpl,
+        });
+        if (theosRes.status >= 200 && theosRes.status < 300 && theosRes.text) {
+          theos = JSON.parse(theosRes.text);
+        }
+      } catch {
+        // optional enrichment
+      }
+
+      return {
+        ok: true,
+        valid: true,
+        isAuthenticated: Boolean(data?.is_authenticated ?? true),
+        isPro: Boolean(data?.is_pro),
+        status,
+        theos,
+        error: null,
+      };
+    }
+
+    return {
+      ok: false,
+      valid: false,
+      isAuthenticated: false,
+      isPro: false,
+      status,
+      error: data?.error || data?.detail || `Falha ao verificar conta (HTTP ${status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      valid: false,
+      isAuthenticated: false,
+      isPro: false,
+      status: 502,
+      error: err?.message || "Erro de conexão ao verificar conta DeepAI",
+    };
+  }
 }

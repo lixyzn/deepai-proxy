@@ -1,571 +1,659 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#07030d" />
-    <title>DeepAI Proxy · Painel</title>
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Painel de controle local do DeepAI Proxy — gateway compatível com a API OpenAI." />
+    <title>DeepAI Proxy · Painel de Controle</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230a0a0b'/%3E%3Cpath d='M11.5 11.5h4.6a4.4 4.4 0 0 1 4.4 4.4v5' fill='none' stroke='%23c9f24b' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='11.5' cy='11.5' r='2.6' fill='%23c9f24b'/%3E%3Ccircle cx='20.5' cy='21.3' r='2.6' fill='%23c9f24b'/%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="/styles.css" />
-    <script src="/app.js" defer></script>
   </head>
   <body>
-    <div class="aurora" aria-hidden="true">
-      <span class="blob blob-a"></span>
-      <span class="blob blob-b"></span>
-      <span class="blob blob-c"></span>
-    </div>
-    <div class="grid-overlay" aria-hidden="true"></div>
+    <div class="ambient" aria-hidden="true"></div>
 
-    <div class="app" id="app">
-      <header class="topbar glass">
+    <!-- Icon sprite -->
+    <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8" rx="1.6"/><rect x="14" y="3" width="7" height="5" rx="1.6"/><rect x="14" y="12" width="7" height="9" rx="1.6"/><rect x="3" y="15" width="7" height="6" rx="1.6"/></symbol>
+      <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2.5"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 8-5-16-3 8H2"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.3-4.3"/></symbol>
+      <symbol id="i-command" viewBox="0 0 24 24"><path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></symbol>
+      <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4.1 13.2a1 1 0 0 0 .78 1.63H11l-1 7.17L19.9 10.8a1 1 0 0 0-.78-1.63H13z"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L20 3M17 6l2.5 2.5M14.5 8.5L17 11"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="M7 9.5l3 2.5-3 2.5M13 15h4"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-3.6 8-10V5.5L12 2 4 5.5V12c0 6.4 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.4"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17v.4"/></symbol>
+      <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.8a16 16 0 0 1 20 0M5 12.5a11 11 0 0 1 14 0M8.5 16.2a6 6 0 0 1 7 0"/><path d="M12 20h.01"/></symbol>
+      <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8" ry="3.2"/><path d="M4 5.5v6c0 1.8 3.6 3.2 8 3.2s8-1.4 8-3.2v-6"/><path d="M4 11.5v6c0 1.8 3.6 3.2 8 3.2s8-1.4 8-3.2v-6"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l12 7.5-12 7.5z"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 4v16M16 4v16"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M10.6 6.2A9.7 9.7 0 0 1 12 6c6.4 0 10 6 10 6a17 17 0 0 1-2.9 3.6M6.6 6.7A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M2.5 2.5l19 19"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></symbol>
+      <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a5 5 0 0 0 7.1 0l2.4-2.4a5 5 0 0 0-7.1-7.1L11 5.4"/><path d="M14 10.5a5 5 0 0 0-7.1 0L4.5 12.9a5 5 0 0 0 7.1 7.1l1.4-1.4"/></symbol>
+      <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9z"/></symbol>
+    </svg>
+
+    <div class="app">
+      <aside class="sidebar" id="sidebar" aria-label="Navegação principal">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32" width="22" height="22" fill="none">
-              <path d="M16 2.8 27.4 9.4v13.2L16 29.2 4.6 22.6V9.4L16 2.8Z" stroke="url(#brandGrad)" stroke-width="1.6" />
-              <path d="M16 9.4 22 13v6l-6 3.6L10 19v-6l6-3.6Z" fill="url(#brandGrad)" opacity=".9" />
-              <defs>
-                <linearGradient id="brandGrad" x1="4" y1="3" x2="28" y2="30" gradientUnits="userSpaceOnUse">
-                  <stop stop-color="#e9d5ff" />
-                  <stop offset=".5" stop-color="#a855f7" />
-                  <stop offset="1" stop-color="#d946ef" />
-                </linearGradient>
-              </defs>
+            <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round">
+              <path d="M7.6 7.6h4.3a4.1 4.1 0 0 1 4.1 4.1v4.6" stroke="currentColor" stroke-width="2.2" />
+              <circle cx="7.6" cy="7.6" r="2.4" fill="currentColor" stroke="none" />
+              <circle cx="16" cy="16.8" r="2.4" fill="currentColor" stroke="none" />
             </svg>
           </span>
-          <span class="brand-text">DeepAI <strong>Proxy</strong></span>
+          <span class="brand-copy">
+            <strong>deepai<em>proxy</em></strong>
+            <small>gateway OpenAI-compatível</small>
+          </span>
         </div>
-        <div class="topbar-right">
-          <span class="status-pill" id="serverStatus"><i></i><span>Online</span></span>
-          <button class="icon-btn" id="lockBtn" type="button" title="Trocar token de administrador" aria-label="Trocar token de administrador">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="4.5" y="10.5" width="15" height="10" rx="2.5" />
-              <path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7" />
-            </svg>
+
+        <nav class="nav">
+          <p class="nav-group">Visão geral</p>
+          <button class="nav-item is-active" data-tab="dashboard" type="button" aria-current="page">
+            <svg class="icon"><use href="#i-grid" /></svg>
+            <span>Dashboard</span>
           </button>
+
+          <p class="nav-group">Gestão</p>
+          <button class="nav-item" data-tab="accounts" type="button">
+            <svg class="icon"><use href="#i-users" /></svg>
+            <span>Contas</span>
+            <span class="nav-badge" id="navAccountsCount">0</span>
+          </button>
+          <button class="nav-item" data-tab="models" type="button">
+            <svg class="icon"><use href="#i-cpu" /></svg>
+            <span>Modelos</span>
+            <span class="nav-badge" id="navModelsCount">0</span>
+          </button>
+
+          <p class="nav-group">Sistema</p>
+          <button class="nav-item" data-tab="settings" type="button">
+            <svg class="icon"><use href="#i-sliders" /></svg>
+            <span>Configurações</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="health" id="serverHealthPill">
+            <span class="health-dot"></span>
+            <span class="health-copy">
+              <strong id="serverHealthText">Verificando…</strong>
+              <small id="serverHealthSub">conectando ao proxy</small>
+            </span>
+          </div>
+
+          <dl class="side-meta">
+            <div><dt>Rotação</dt><dd id="sidebarStrategy">—</dd></div>
+            <div><dt>Endpoint</dt><dd><code id="sidebarBaseUrl">/v1</code></dd></div>
+            <div><dt>Uptime</dt><dd id="sidebarUptime">—</dd></div>
+          </dl>
         </div>
-      </header>
+      </aside>
 
+      <div class="scrim" id="sidebarScrim" hidden></div>
 
-      <nav class="tabs glass" id="tabs" role="tablist" aria-label="Seções do painel">
-        <button class="tab active" data-tab="login" type="button" role="tab" aria-selected="true">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 13.5 13.5 10.5"/><path d="M7 17H5.5A3.5 3.5 0 0 1 2 13.5v0A3.5 3.5 0 0 1 5.5 10H8"/><path d="M17 7h1.5A3.5 3.5 0 0 1 22 10.5v0A3.5 3.5 0 0 1 18.5 14H16"/></svg>
-          <span>Login</span>
-        </button>
-        <button class="tab" data-tab="panel" type="button" role="tab" aria-selected="false">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V10"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg>
-          <span>Painel</span>
-        </button>
-        <button class="tab" data-tab="models" type="button" role="tab" aria-selected="false">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 8.5 4.7L12 12.4 3.5 7.7 12 3Z"/><path d="m4 12 8 4.5 8-4.5"/><path d="m4 16.3 8 4.5 8-4.5"/></svg>
-          <span>Modelos</span>
-        </button>
-        <button class="tab" data-tab="access" type="button" role="tab" aria-selected="false">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="3.5"/><path d="m10.5 12.5 8-8"/><path d="m15 6 2.5 2.5"/><path d="m17.5 3.5 3 3"/></svg>
-          <span>Acesso</span>
-        </button>
-      </nav>
+      <div class="main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="icon-btn mobile-only" id="mobileMenuBtn" type="button" aria-label="Abrir menu">
+              <svg class="icon"><use href="#i-menu" /></svg>
+            </button>
+            <div class="title-block">
+              <h1 id="pageTitle">Dashboard</h1>
+              <p id="pageSubtitle">Tráfego, latência e saúde do gateway</p>
+            </div>
+          </div>
 
+          <div class="topbar-right">
+            <button class="cmd-trigger" id="btnCommand" type="button" aria-label="Abrir comandos">
+              <svg class="icon"><use href="#i-search" /></svg>
+              <span>Buscar ou executar…</span>
+              <kbd id="cmdKbd">Ctrl K</kbd>
+            </button>
 
-      <main>
-        <section class="tab-view" id="view-login" data-view="login">
-          <section class="hero hero-compact">
-            <div class="eyebrow"><span class="spark"></span> Login</div>
-            <h1>Conecte suas contas <span class="grad">DeepAI</span>.</h1>
-            <p>
-              Gere o link oficial e aprove no navegador. O proxy guarda só a
-              credencial criptografada — sem senha, sem cookie, sem gambiarra.
-            </p>
-          </section>
-          <section class="glass card login-card login-solo" id="loginCard">
-            <div class="card-head">
-              <div>
-                <span class="card-kicker">Login</span>
-                <h2>Adicionar conta</h2>
+            <label class="switch switch-labeled" title="Atualizar métricas automaticamente a cada 15s">
+              <input type="checkbox" id="autoRefreshToggle" checked />
+              <span class="switch-track"></span>
+              <span class="switch-label">Auto</span>
+            </label>
+
+            <button class="icon-btn" id="btnGlobalRefresh" type="button" aria-label="Atualizar dados" title="Atualizar dados">
+              <svg class="icon"><use href="#i-refresh" /></svg>
+            </button>
+            <button class="icon-btn" id="btnThemeToggle" type="button" aria-label="Alternar tema" title="Alternar tema">
+              <svg class="icon icon-sun"><use href="#i-sun" /></svg>
+              <svg class="icon icon-moon"><use href="#i-moon" /></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="banner" id="globalBanner" role="status" aria-live="polite" hidden>
+          <svg class="icon"><use href="#i-alert" /></svg>
+          <span id="globalBannerText">Não foi possível conectar ao proxy local.</span>
+          <button class="btn btn-ghost btn-xs" id="globalBannerRetry" type="button">Tentar novamente</button>
+        </div>
+
+        <main class="content">
+          <!-- ================= DASHBOARD ================= -->
+          <section class="panel is-active" id="tab-dashboard" role="tabpanel" aria-label="Dashboard">
+            <div class="toolbar">
+              <div class="segmented" id="metricsRangePills" role="group" aria-label="Período das métricas">
+                <button data-range="1h" aria-pressed="true" type="button">1h</button>
+                <button data-range="24h" aria-pressed="false" type="button">24h</button>
+                <button data-range="7d" aria-pressed="false" type="button">7d</button>
+                <button data-range="all" aria-pressed="false" type="button">Tudo</button>
               </div>
-              <span class="badge-soft">desktop_auth</span>
-            </div>
-
-            <ol class="steps" id="steps">
-              <li class="step active" data-step="1"><span class="step-dot">1</span><span>Gerar link</span></li>
-              <li class="step" data-step="2"><span class="step-dot">2</span><span>Aprovar</span></li>
-              <li class="step" data-step="3"><span class="step-dot">3</span><span>Pronto</span></li>
-            </ol>
-
-            <div id="loginStart">
-              <button class="btn btn-primary btn-lg" id="startBtn" type="button">
-                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M10.5 13.5 13.5 10.5" />
-                  <path d="M7.2 16.8 5.4 18.6a3.9 3.9 0 0 1-5.5-5.5l3.6-3.6a3.9 3.9 0 0 1 5.5 0" transform="translate(2.2 -1.2) scale(.82)" />
-                  <path d="M16.8 7.2 18.6 5.4a3.9 3.9 0 0 1 5.5 5.5l-3.6 3.6a3.9 3.9 0 0 1-5.5 0" transform="translate(-1.2 2.2) scale(.82)" />
-                </svg>
-                Gerar link de login
-              </button>
-              <p class="hint">
-                Abre a página oficial da DeepAI. O código volta para
-                <code>127.0.0.1</code> e é trocado pela API key uma única vez.
-              </p>
-            </div>
-
-            <div class="link-panel hidden" id="linkPanel" aria-live="polite">
-              <label for="loginUrl">Link de login</label>
-              <div class="copy-field">
-                <input id="loginUrl" readonly />
-                <button class="copy-btn" id="copyLinkBtn" type="button" title="Copiar link">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <rect x="8" y="8" width="12" height="12" rx="2.5" />
-                    <path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8" />
-                  </svg>
-                  <span>Copiar</span>
+              <div class="toolbar-actions">
+                <span class="range-caption" id="chartRangeLabel">Última hora</span>
+                <button class="btn btn-ghost btn-sm" id="btnExportMetrics" type="button">
+                  <svg class="icon"><use href="#i-download" /></svg>
+                  <span>Exportar</span>
+                </button>
+                <button class="btn btn-danger-ghost btn-sm" id="btnResetMetrics" type="button">
+                  <svg class="icon"><use href="#i-trash" /></svg>
+                  <span>Resetar</span>
                 </button>
               </div>
-              <div class="link-actions">
-                <a class="btn btn-ghost" id="openLinkBtn" href="#" target="_blank" rel="noreferrer noopener">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M14 4h6v6" />
-                    <path d="M20 4 11 13" />
-                    <path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
-                  </svg>
-                  Abrir navegador
-                </a>
-                <button class="btn btn-ghost" id="restartBtn" type="button">Gerar outro</button>
-              </div>
-              <div class="waiting" id="waiting">
-                <span class="spinner" id="waitSpinner"></span>
-                <div class="waiting-text">
-                  <strong id="waitTitle">Aguardando aprovação</strong>
-                  <small id="waitSub">O link expira em <span id="countdown">10:00</span></small>
+            </div>
+
+            <div class="kpi-grid">
+              <article class="kpi">
+                <div class="kpi-top">
+                  <span class="kpi-label">Requisições</span>
+                  <span class="kpi-ico tone-violet"><svg class="icon"><use href="#i-activity" /></svg></span>
                 </div>
-                <span class="waiting-mark hidden" id="waitSuccess" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.2 4.2L19 7" /></svg>
-                </span>
-              </div>
-            </div>
+                <div class="kpi-value" id="kpiTotalRequests">—</div>
+                <p class="kpi-sub" id="kpiTotalSub">Aguardando dados…</p>
+                <div class="spark" id="kpiReqSpark"></div>
+              </article>
 
-            <div class="divider"><span>ou</span></div>
-
-            <details class="fallback">
-              <summary>
-                <span class="summary-icon">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 15 15 9" /><path d="M7 17H5.5A3.5 3.5 0 0 1 2 13.5v0A3.5 3.5 0 0 1 5.5 10H8" /><path d="M17 7h1.5A3.5 3.5 0 0 1 22 10.5v0A3.5 3.5 0 0 1 18.5 14H16" /></svg>
-                </span>
-                Colar retorno do navegador
-                <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-              </summary>
-              <p class="fallback-text">
-                Se o proxy estiver em outra máquina, copie a URL final (a que contém
-                <code>?code=</code>) e cole aqui.
-              </p>
-              <div class="field">
-                <input id="callbackInput" placeholder="http://127.0.0.1:…/auth-callback?code=… ou só o code" autocomplete="off" />
-                <button class="btn btn-secondary" id="completeBtn" type="button">Concluir</button>
-              </div>
-            </details>
-
-            <details class="fallback">
-              <summary>
-                <span class="summary-icon">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="3.5" /><path d="m10.5 12.5 8-8" /><path d="m15 6 2.5 2.5" /><path d="m17.5 3.5 3 3" /></svg>
-                </span>
-                Já tenho uma API key
-                <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-              </summary>
-              <p class="fallback-text">
-                A chave é validada na DeepAI e criptografada antes de tocar o disco.
-              </p>
-              <div class="field">
-                <input id="apiKeyInput" type="password" placeholder="Cole a Api-Key da DeepAI" autocomplete="off" spellcheck="false" />
-                <button class="btn btn-secondary" id="importBtn" type="button">Adicionar</button>
-              </div>
-            </details>
-          </section>
-          <section class="glass card accounts-card">
-          <div class="card-head">
-            <div>
-              <span class="card-kicker">Contas</span>
-              <h2>Contas conectadas</h2>
-            </div>
-            <span class="count-badge" id="accountCount">0</span>
-          </div>
-          <div class="accounts-grid" id="accountsGrid"></div>
-          <div class="empty" id="emptyState">
-            <div class="empty-icon" aria-hidden="true">
-              <svg viewBox="0 0 32 32" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="16" r="12" opacity=".45" /><path d="M16 10v12M10 16h12" /></svg>
-            </div>
-            <strong>Nenhuma conta ainda</strong>
-            <span>Gere o primeiro link de login para começar.</span>
-          </div>
-        </section>
-        </section>
-
-        <section class="tab-view hidden" id="view-panel" data-view="panel">
-          <section class="hero hero-compact">
-            <div class="eyebrow"><span class="spark"></span> Painel</div>
-            <h1>Tudo que passa pelo <span class="grad">proxy</span>.</h1>
-            <p>Requisições, latência, tokens, cache e custo estimado em tempo real.</p>
-          </section>
-
-          <section class="metrics" aria-label="Resumo de uso do proxy">
-            <div class="metric glass">
-              <span class="metric-label">Requisições</span>
-              <strong id="metricRequests">0</strong>
-              <span class="metric-hint" id="metricRequestsHint">nenhuma ainda</span>
-            </div>
-            <div class="metric glass">
-              <span class="metric-label">Sucesso</span>
-              <strong id="metricSuccess">—</strong>
-              <span class="metric-hint" id="metricSuccessHint">sem dados</span>
-            </div>
-            <div class="metric glass">
-              <span class="metric-label">Latência média</span>
-              <strong id="metricLatency">—</strong>
-              <span class="metric-hint" id="metricLatencyHint">sem dados</span>
-            </div>
-            <div class="metric glass">
-              <span class="metric-label">Tokens</span>
-              <strong id="metricTokens">0</strong>
-              <span class="metric-hint" id="metricTokensHint">in 0 · out 0</span>
-            </div>
-            <div class="metric glass">
-              <span class="metric-label">Cache</span>
-              <strong id="metricCache">—</strong>
-              <span class="metric-hint" id="metricCacheHint">sem dados</span>
-            </div>
-            <div class="metric glass">
-              <span class="metric-label">Theos</span>
-              <strong id="metricTheos">—</strong>
-              <span class="metric-hint" id="metricTheosHint">sem leitura de saldo</span>
-            </div>
-          </section>
-
-          <section class="charts-grid" aria-label="Gráficos de uso">
-            <article class="glass card chart-card">
-              <div class="card-head chart-head">
-                <div>
-                  <span class="card-kicker">Volume</span>
-                  <h2>Requisições por hora</h2>
+              <article class="kpi">
+                <div class="kpi-top">
+                  <span class="kpi-label">Taxa de sucesso</span>
+                  <span class="kpi-ico tone-mint"><svg class="icon"><use href="#i-shield" /></svg></span>
                 </div>
-                <span class="chart-note" id="chartRequestsNote">últimas 12h</span>
-              </div>
-              <div class="chart-body" id="chartRequests"></div>
-            </article>
-            <article class="glass card chart-card">
-              <div class="card-head chart-head">
-                <div>
-                  <span class="card-kicker">Desempenho</span>
-                  <h2>Latência recente</h2>
+                <div class="kpi-value" id="kpiSuccessRate">—</div>
+                <p class="kpi-sub" id="kpiSuccessSub">Aguardando dados…</p>
+                <div class="spark" id="kpiSuccessSpark"></div>
+              </article>
+
+              <article class="kpi">
+                <div class="kpi-top">
+                  <span class="kpi-label">Latência média</span>
+                  <span class="kpi-ico tone-cyan"><svg class="icon"><use href="#i-clock" /></svg></span>
                 </div>
-                <span class="chart-note" id="chartLatencyNote">últimas 30</span>
-              </div>
-              <div class="chart-body" id="chartLatency"></div>
-            </article>
-            <article class="glass card chart-card chart-wide">
-              <div class="card-head chart-head">
-                <div>
-                  <span class="card-kicker">Distribuição</span>
-                  <h2>Modelos mais usados</h2>
+                <div class="kpi-value" id="kpiAvgLatency">—</div>
+                <p class="kpi-sub" id="kpiLatencySub">P95 —</p>
+                <div class="spark" id="kpiLatencySpark"></div>
+              </article>
+
+              <article class="kpi">
+                <div class="kpi-top">
+                  <span class="kpi-label">Contas ativas</span>
+                  <span class="kpi-ico tone-sky"><svg class="icon"><use href="#i-users" /></svg></span>
                 </div>
-                <span class="chart-note" id="chartModelsNote">—</span>
+                <div class="kpi-value" id="kpiActiveAccounts">—</div>
+                <p class="kpi-sub" id="kpiAccountsSub">Nenhuma conta conectada</p>
+                <div class="ratio" aria-hidden="true"><span id="kpiAccountsBar"></span></div>
+              </article>
+            </div>
+
+            <div class="dash-main">
+              <article class="card chart-card">
+                <div class="card-head">
+                  <div class="card-head-copy">
+                    <h2>Requisições &amp; latência</h2>
+                    <p>Volume de chamadas e latência média por intervalo</p>
+                  </div>
+                  <div class="legend" id="chartLegend" role="group" aria-label="Séries do gráfico">
+                    <button class="legend-btn is-on" data-series="requests" type="button" aria-pressed="true">
+                      <i style="--c: var(--brand)"></i>Requisições
+                    </button>
+                    <button class="legend-btn is-on" data-series="latency" type="button" aria-pressed="true">
+                      <i style="--c: var(--brand-2)"></i>Latência
+                    </button>
+                  </div>
+                </div>
+                <div class="chart-stage" id="timeSeriesChart" role="img" aria-label="Gráfico de requisições e latência ao longo do tempo"></div>
+              </article>
+
+              <article class="card">
+                <div class="card-head">
+                  <div class="card-head-copy">
+                    <h2>Uso por modelo</h2>
+                    <p>Distribuição das chamadas</p>
+                  </div>
+                </div>
+                <div class="donut-wrap" id="modelsBreakdownChart"></div>
+              </article>
+            </div>
+
+            <div class="dash-split">
+              <article class="card">
+                <div class="card-head">
+                  <div class="card-head-copy">
+                    <h2>Uso por conta</h2>
+                    <p>Balanceamento e saúde</p>
+                  </div>
+                </div>
+                <div id="accountsBreakdownChart"></div>
+              </article>
+
+              <article class="card ctx-card">
+                <div class="card-head">
+                  <div class="card-head-copy">
+                    <h2>Saúde do contexto</h2>
+                    <p>Janela, tokens e compactações</p>
+                  </div>
+                </div>
+                <div class="ctx-stats">
+                  <div><span>Tokens de entrada</span><strong id="ctxIn">—</strong></div>
+                  <div><span>Tokens de saída</span><strong id="ctxOut">—</strong></div>
+                </div>
+                <div class="meter">
+                  <div class="meter-head"><span>Uso médio da janela</span><b id="ctxUtilValue">0%</b></div>
+                  <div class="meter-track"><span id="ctxUtilBar"></span></div>
+                </div>
+                <div class="mini-list">
+                  <span>P95 <b id="ctxP95">—</b></span>
+                  <span>Compactações <b id="ctxTrimmed">0</b></span>
+                </div>
+              </article>
+            </div>
+
+            <article class="card card-flush">
+              <div class="card-head card-pad">
+                <div class="card-head-copy">
+                  <h2>Requisições recentes</h2>
+                  <p>Últimas chamadas processadas pelo endpoint OpenAI</p>
+                </div>
+                <span class="badge badge-muted" id="recentCountBadge">0 registros</span>
               </div>
-              <div class="chart-body chart-body-bars" id="chartModels"></div>
+              <div class="table-wrap">
+                <table class="table" id="recentTable">
+                  <thead>
+                    <tr>
+                      <th aria-sort="descending"><button class="sort" data-sort="timestamp" type="button">Data/hora<svg class="icon"><use href="#i-chevron" /></svg></button></th>
+                      <th aria-sort="none"><button class="sort" data-sort="model" type="button">Modelo<svg class="icon"><use href="#i-chevron" /></svg></button></th>
+                      <th aria-sort="none"><button class="sort" data-sort="account" type="button">Conta<svg class="icon"><use href="#i-chevron" /></svg></button></th>
+                      <th aria-sort="none"><button class="sort" data-sort="latency" type="button">Latência<svg class="icon"><use href="#i-chevron" /></svg></button></th>
+                      <th aria-sort="none" class="col-ctx"><button class="sort" data-sort="context" type="button">Contexto<svg class="icon"><use href="#i-chevron" /></svg></button></th>
+                      <th aria-sort="none"><button class="sort" data-sort="status" type="button">Status<svg class="icon"><use href="#i-chevron" /></svg></button></th>
+                      <th class="col-mode">Modo</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recentRequestsBody">
+                    <tr><td colspan="7"><div class="sk sk-row"></div></td></tr>
+                  </tbody>
+                </table>
+              </div>
             </article>
           </section>
 
-          <section class="glass card activity-card">
-          <div class="card-head">
-            <div>
-              <span class="card-kicker">Telemetria</span>
-              <h2>Atividade recente</h2>
-            </div>
-            <div class="activity-actions">
-              <span class="telemetry-updated" id="telemetryUpdated">—</span>
-              <button class="btn btn-ghost btn-sm" id="refreshTelemetry" type="button">Atualizar</button>
-              <button class="btn btn-danger-ghost btn-sm" id="clearTelemetry" type="button">Limpar</button>
-            </div>
-          </div>
-          <div class="activity-table-wrap" id="activityWrap">
-            <table class="activity-table">
-              <thead>
-                <tr>
-                  <th>Hora</th>
-                  <th>Conta</th>
-                  <th>Modelo</th>
-                  <th>Rota</th>
-                  <th>Status</th>
-                  <th>Latência</th>
-                  <th>Tokens</th>
-                  <th>Cache</th>
-                  <th>Theos</th>
-                </tr>
-              </thead>
-              <tbody id="activityBody"></tbody>
-            </table>
-          </div>
-          <div class="empty hidden" id="activityEmpty">
-            <div class="empty-icon" aria-hidden="true">
-              <svg viewBox="0 0 32 32" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 24V12M16 24V8M26 24v-6" opacity=".7" /><path d="M4 26h24" opacity=".45" /></svg>
-            </div>
-            <strong>Nenhuma requisição ainda</strong>
-            <span>Use o proxy em um cliente OpenAI para ver a telemetria aqui.</span>
-          </div>
-        </section>
+          <!-- ================= CONTAS ================= -->
+          <section class="panel" id="tab-accounts" role="tabpanel" aria-label="Contas">
+            <div class="accounts-layout">
+              <div class="stack">
+                <article class="card card-flush">
+                  <div class="card-head card-pad">
+                    <div class="card-head-copy">
+                      <h2>Contas conectadas</h2>
+                      <p>Status, plano e uso de cada conta</p>
+                    </div>
+                    <div class="btn-row">
+                      <span class="badge badge-muted" id="accountsActiveBadge">0 ativas</span>
+                      <span class="badge badge-muted" id="accountsTotalBadge">0 contas</span>
+                    </div>
+                  </div>
+                  <div class="accounts-grid" id="accountsList">
+                    <div class="sk sk-card"></div>
+                    <div class="sk sk-card"></div>
+                  </div>
+                </article>
 
-        <section class="glass card conversation-card" aria-label="Conversas monitoradas pelo proxy">
-          <div class="card-head">
-            <div>
-              <span class="card-kicker">Memória do proxy</span>
-              <h2>Conversas monitoradas</h2>
-            </div>
-            <div class="activity-actions">
-              <span class="telemetry-updated" id="conversationsUpdated">—</span>
-              <button class="btn btn-danger-ghost btn-sm" id="clearConversations" type="button">Limpar conversas</button>
-            </div>
-          </div>
-          <div class="conversation-stats">
-            <div><span>Sessões</span><strong id="conversationSessions">0</strong></div>
-            <div><span>Mensagens</span><strong id="conversationMessages">0</strong></div>
-            <div><span>Contexto restaurado</span><strong id="conversationRestored">0</strong></div>
-            <div><span>Espaço</span><strong id="conversationBytes">0 B</strong></div>
-          </div>
-          <p class="conversation-note">O proxy reconhece a conversa pelo histórico, restaura o que o cliente compactou e usa um id estável mesmo com troca de conta ou modelo. O conteúdo fica criptografado em <code>data/conversations.json</code>.</p>
-          <div class="conversation-list" id="conversationList"></div>
-          <div class="empty hidden" id="conversationsEmpty">
-            <strong>Nenhuma conversa registrada</strong>
-            <span>O primeiro request de chat cria uma sessão automaticamente.</span>
-          </div>
-        </section>
-        </section>
+                <article class="card">
+                  <div class="card-head">
+                    <div class="card-head-copy">
+                      <h2>Estratégia de rotação</h2>
+                      <p>Como o proxy escolhe a conta de cada requisição</p>
+                    </div>
+                  </div>
+                  <div class="strategy-grid" id="rotationStrategyGroup" role="radiogroup" aria-label="Estratégia de rotação">
+                    <button class="strategy" data-strategy="active" type="button" role="radio" aria-checked="false">
+                      <span class="strategy-ico"><svg class="icon"><use href="#i-power" /></svg></span>
+                      <strong>Conta ativa</strong>
+                      <small>Usa somente a conta marcada como ativa</small>
+                    </button>
+                    <button class="strategy" data-strategy="round-robin" type="button" role="radio" aria-checked="false">
+                      <span class="strategy-ico"><svg class="icon"><use href="#i-refresh" /></svg></span>
+                      <strong>Round-robin</strong>
+                      <small>Alterna igualmente entre contas habilitadas</small>
+                    </button>
+                    <button class="strategy" data-strategy="failover" type="button" role="radio" aria-checked="false">
+                      <span class="strategy-ico"><svg class="icon"><use href="#i-shield" /></svg></span>
+                      <strong>Failover automático</strong>
+                      <small>Prioriza a ativa e troca em erro ou limite</small>
+                    </button>
+                  </div>
+                </article>
+              </div>
 
-        <section class="tab-view hidden" id="view-models" data-view="models">
-          <section class="hero hero-compact">
-            <div class="eyebrow"><span class="spark"></span> Catálogo</div>
-            <h1>Modelos <span class="grad">disponíveis</span>.</h1>
-            <p>Grátis, pagos e premier direto do catálogo da DeepAI, com atualização manual.</p>
+              <aside class="stack">
+                <article class="card">
+                  <div class="card-head">
+                    <div class="card-head-copy">
+                      <h2>Conectar conta DeepAI</h2>
+                      <p>Login oficial pelo navegador, com PKCE e callback local</p>
+                    </div>
+                    <span class="status-pill" id="authStatusPill" data-status="idle">idle</span>
+                  </div>
+
+                  <div class="field">
+                    <label for="newAccountLabel">Rótulo da conta <span class="opt">opcional</span></label>
+                    <input class="input" id="newAccountLabel" type="text" maxlength="100" placeholder="Ex: Conta principal, Trabalho…" autocomplete="off" />
+                  </div>
+
+                  <div class="form-actions">
+                    <button class="btn btn-primary" id="btnStartLogin" type="button">
+                      <svg class="icon"><use href="#i-bolt" /></svg>
+                      <span>Conectar nova conta</span>
+                    </button>
+                    <button class="btn btn-ghost" id="btnCancelLogin" type="button" disabled>Cancelar</button>
+                  </div>
+
+                  <div class="auth-panel" id="authLinkPanel" hidden>
+                    <div class="auth-panel-top">
+                      <span class="auth-panel-title"><svg class="icon"><use href="#i-link" /></svg> Link de autenticação</span>
+                      <div class="btn-row">
+                        <button class="btn btn-ghost btn-xs" id="btnCopyLoginUrl" type="button">
+                          <svg class="icon"><use href="#i-copy" /></svg><span>Copiar</span>
+                        </button>
+                        <a class="btn btn-primary btn-xs" id="btnOpenLoginUrl" href="#" target="_blank" rel="noopener noreferrer">
+                          <svg class="icon"><use href="#i-external" /></svg><span>Abrir</span>
+                        </a>
+                      </div>
+                    </div>
+                    <input class="input mono" id="loginUrlInput" type="text" readonly />
+                    <div class="auth-meta">
+                      <span>Login <code id="authLoginId">—</code></span>
+                      <span>Expira em <b id="authExpiresAt">—</b></span>
+                    </div>
+                    <div class="auth-waiting">
+                      <span class="spinner" aria-hidden="true"></span>
+                      <span>Aguardando confirmação no navegador… <b id="authCountdown"></b></span>
+                    </div>
+                  </div>
+
+                  <div class="notice" id="authNotice">
+                    <svg class="icon"><use href="#i-info" /></svg>
+                    <span id="authNoticeText">Pronto para conectar uma nova conta.</span>
+                  </div>
+
+                  <details class="disclosure">
+                    <summary>Redirecionamento falhou? Enviar callback manualmente</summary>
+                    <div class="disclosure-body">
+                      <div class="field">
+                        <label for="manualCallbackInput">URL de callback ou código</label>
+                        <input class="input mono" id="manualCallbackInput" type="text" placeholder="http://127.0.0.1:1455/auth/callback?code=…&amp;state=…" />
+                      </div>
+                      <button class="btn btn-secondary btn-sm" id="btnSubmitManualCallback" type="button">Enviar callback</button>
+                    </div>
+                  </details>
+                </article>
+
+                <article class="card">
+                  <div class="card-head">
+                    <div class="card-head-copy">
+                      <h2>Importar API key</h2>
+                      <p>Adicione uma conta colando a chave DeepAI diretamente</p>
+                    </div>
+                  </div>
+
+                  <div class="stack">
+                    <div class="field">
+                      <label for="importKeyLabel">Rótulo <span class="opt">opcional</span></label>
+                      <input class="input" id="importKeyLabel" type="text" maxlength="100" placeholder="Ex: Chave Pro, Backup…" autocomplete="off" />
+                    </div>
+                    <div class="field">
+                      <label for="importKeyValue">API key ou access token</label>
+                      <div class="input-group">
+                        <input class="input mono" id="importKeyValue" type="password" placeholder="Cole a chave aqui…" autocomplete="off" spellcheck="false" />
+                        <button class="icon-btn" id="btnToggleImportKey" type="button" aria-label="Mostrar chave">
+                          <svg class="icon"><use href="#i-eye" /></svg>
+                        </button>
+                      </div>
+                      <p class="hint"><svg class="icon"><use href="#i-shield" /></svg> A chave fica apenas no seu computador, em <code>data/accounts.json</code>.</p>
+                    </div>
+                    <div class="form-actions end">
+                      <button class="btn btn-primary" id="btnImportKey" type="button">
+                        <svg class="icon"><use href="#i-plus" /></svg>
+                        <span>Importar chave</span>
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              </aside>
+            </div>
           </section>
 
-          <section class="glass card models-card">
-            <div class="card-head">
-              <div>
-                <span class="card-kicker">DeepAI</span>
-                <h2>Catálogo de modelos</h2>
+          <!-- ================= MODELOS ================= -->
+          <section class="panel" id="tab-models" role="tabpanel" aria-label="Modelos">
+            <article class="card models-head">
+              <div class="models-head-top">
+                <div class="card-head-copy">
+                  <h2>Catálogo de modelos</h2>
+                  <p>Modelos disponíveis no proxy, com limites de contexto e capacidades</p>
+                </div>
+                <p class="result-line"><span id="modelsResultCount">Carregando catálogo…</span></p>
               </div>
-              <div class="models-actions">
-                <span class="telemetry-updated" id="modelsUpdated">—</span>
-                <button class="btn btn-ghost btn-sm" id="refreshModels" type="button">Atualizar catálogo</button>
+              <div class="toolbar">
+                <div class="search">
+                  <svg class="icon"><use href="#i-search" /></svg>
+                  <input class="input" id="modelsSearchInput" type="search" placeholder="Buscar por nome, ID ou provedor…" autocomplete="off" />
+                </div>
+                <div class="segmented" id="modelsTierFilters" role="group" aria-label="Filtrar por plano">
+                  <button data-tier="all" aria-pressed="true" type="button">Todos <span id="countModelsAll">0</span></button>
+                  <button data-tier="free" aria-pressed="false" type="button">Grátis <span id="countModelsFree">0</span></button>
+                  <button data-tier="paid" aria-pressed="false" type="button">Pro <span id="countModelsPaid">0</span></button>
+                </div>
               </div>
-            </div>
-            <div class="model-toolbar">
-              <div class="filter-chips" id="modelFilters" role="group" aria-label="Filtrar modelos">
-                <button class="chip active" data-filter="all" type="button">Todos <span id="countAll">0</span></button>
-                <button class="chip" data-filter="free" type="button">Grátis <span id="countFree">0</span></button>
-                <button class="chip" data-filter="paid" type="button">Pagos <span id="countPaid">0</span></button>
-                <button class="chip" data-filter="premier" type="button">Premier <span id="countPremier">0</span></button>
-              </div>
-              <div class="model-tools">
-                <select class="select-input" id="modelProvider" aria-label="Filtrar por fabricante">
-                  <option value="all">Todos os fabricantes</option>
-                </select>
-                <select class="select-input" id="modelSort" aria-label="Ordenar modelos">
-                  <option value="default">Ordem do catálogo</option>
-                  <option value="name">Nome A–Z</option>
-                  <option value="price-asc">Menor preço</option>
-                  <option value="price-desc">Maior preço</option>
-                  <option value="context-desc">Maior contexto</option>
-                </select>
-                <input class="search-input" id="modelSearch" placeholder="Buscar nome ou id…" autocomplete="off" />
-              </div>
-            </div>
-            <p class="models-summary" id="modelsSummary">Conecte uma conta para carregar o catálogo.</p>
-            <div class="models-grid" id="modelsGrid"></div>
-            <div class="empty hidden" id="modelsEmpty">
-              <div class="empty-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 8.5 4.7L12 12.4 3.5 7.7 12 3Z"/><path d="m4 12 8 4.5 8-4.5"/><path d="m4 16.3 8 4.5 8-4.5"/></svg>
-              </div>
-              <strong>Nenhum modelo neste filtro</strong>
-              <span>Ajuste a busca ou atualize o catálogo.</span>
+            </article>
+
+            <div class="models-grid" id="modelsGrid">
+              <div class="sk sk-card"></div>
+              <div class="sk sk-card"></div>
+              <div class="sk sk-card"></div>
             </div>
           </section>
-        </section>
 
-        <section class="tab-view hidden" id="view-access" data-view="access">
-          <section class="hero hero-compact">
-            <div class="eyebrow"><span class="spark"></span> Acesso</div>
-            <h1>Plugue no seu <span class="grad">cliente</span>.</h1>
-            <p>Base URL e token do proxy para OpenCode, Hermes, DeepSeek, Arnis ou qualquer SDK OpenAI.</p>
-          </section>
+          <!-- ================= CONFIGURAÇÕES ================= -->
+          <section class="panel" id="tab-settings" role="tabpanel" aria-label="Configurações">
+            <div class="grid-2">
+              <article class="card">
+                <div class="card-head">
+                  <div class="card-head-copy">
+                    <h2>Chave de acesso</h2>
+                    <p>Proteja os endpoints <code>/v1/*</code> contra uso não autorizado</p>
+                  </div>
+                </div>
 
-          <div class="access-layout">
-            <aside class="glass card access-card">
-            <div class="card-head">
-              <div>
-                <span class="card-kicker">API</span>
-                <h2>Acesso do proxy</h2>
-              </div>
-              <span class="badge-soft badge-green">OpenAI-compatible</span>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <strong>Exigir chave API</strong>
+                    <p>Clientes devem enviar <code>Authorization: Bearer &lt;chave&gt;</code> ou <code>x-api-key</code>.</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="cfgRequireApiKey" />
+                    <span class="switch-track"></span>
+                    <span class="sr-only">Exigir chave API</span>
+                  </label>
+                </div>
+
+                <div class="field">
+                  <label for="cfgProxyApiKey">Chave atual</label>
+                  <div class="input-group">
+                    <input class="input mono" id="cfgProxyApiKey" type="password" autocomplete="off" spellcheck="false" />
+                    <button class="icon-btn" id="btnToggleKeyVisibility" type="button" aria-label="Mostrar chave">
+                      <svg class="icon"><use href="#i-eye" /></svg>
+                    </button>
+                    <button class="icon-btn" id="btnCopyProxyKey" type="button" aria-label="Copiar chave">
+                      <svg class="icon"><use href="#i-copy" /></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="form-actions">
+                  <button class="btn btn-primary" id="btnSaveConfig" type="button">Salvar chave</button>
+                  <button class="btn btn-secondary" id="btnRotateProxyKey" type="button">
+                    <svg class="icon"><use href="#i-refresh" /></svg>
+                    <span>Gerar nova</span>
+                  </button>
+                </div>
+              </article>
+
+              <article class="card">
+                <div class="card-head">
+                  <div class="card-head-copy">
+                    <h2>Conectar suas ferramentas</h2>
+                    <p>Qualquer cliente compatível com a API OpenAI funciona</p>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label>Base URL</label>
+                  <div class="input-group">
+                    <input class="input mono" id="docsBaseUrl" type="text" readonly value="http://127.0.0.1:8787/v1" />
+                    <button class="icon-btn" id="btnCopyBaseUrl" type="button" aria-label="Copiar Base URL">
+                      <svg class="icon"><use href="#i-copy" /></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="code-card">
+                  <div class="code-head">
+                    <div class="code-tabs" id="codeTabs" role="tablist" aria-label="Exemplos de integração">
+                      <button data-code="curl" type="button" role="tab" aria-selected="true">cURL</button>
+                      <button data-code="node" type="button" role="tab" aria-selected="false">Node.js</button>
+                      <button data-code="python" type="button" role="tab" aria-selected="false">Python</button>
+                    </div>
+                    <button class="btn btn-ghost btn-xs" id="btnCopyCode" type="button">
+                      <svg class="icon"><use href="#i-copy" /></svg><span>Copiar</span>
+                    </button>
+                  </div>
+                  <pre class="code" id="docsCodeExample"></pre>
+                </div>
+              </article>
             </div>
 
-            <label for="baseUrl">Base URL</label>
-            <div class="copy-field">
-              <input id="baseUrl" readonly />
-              <button class="copy-btn" data-copy-target="baseUrl" type="button" title="Copiar base URL">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8" /></svg>
-                <span>Copiar</span>
-              </button>
-            </div>
-
-            <label for="proxyToken">Token do proxy</label>
-            <div class="copy-field">
-              <input id="proxyToken" type="password" readonly />
-              <button class="icon-btn inline-icon" id="revealBtn" type="button" title="Mostrar token" aria-label="Mostrar token">
-                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
-              </button>
-              <button class="copy-btn" data-copy-target="proxyToken" type="button" title="Copiar token">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8" /></svg>
-                <span>Copiar</span>
-              </button>
-            </div>
-
-            <div class="code-block">
-              <div class="code-head">
-                <span>curl</span>
-                <button class="copy-btn subtle" id="copySnippet" type="button">Copiar</button>
-              </div>
-              <pre id="snippet"><code>curl http://127.0.0.1:8790/v1/chat/completions \
-  -H "Authorization: Bearer $DEEPAI_PROXY_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepai/glm-5.3-flash",
-    "messages": [{ "role": "user", "content": "Olá!" }]
-  }'</code></pre>
-            </div>
-
-            <div class="access-foot">
-              <span class="mini-note">Use também em qualquer SDK OpenAI.</span>
-              <button class="btn btn-danger-ghost btn-sm" id="rotateBtn" type="button">Rotacionar token</button>
-            </div>
-          </aside>
-            <section class="glass card clients-card">
+            <article class="card">
               <div class="card-head">
-                <div>
-                  <span class="card-kicker">Clientes</span>
-                  <h2>Chat completions</h2>
+                <div class="card-head-copy">
+                  <h2>Contexto</h2>
+                  <p>Repasse integral da conversa, sem poda nem compactação do proxy</p>
                 </div>
-                <span class="badge-soft badge-green">OpenAI</span>
+                <span class="badge badge-brand" id="ctxModeBadge">Pass-through</span>
               </div>
-              <div class="client-list">
-                <div class="client-item"><strong>OpenCode</strong><span>provider openai-compatible</span></div>
-                <div class="client-item"><strong>Hermes</strong><span>base URL + bearer token</span></div>
-                <div class="client-item"><strong>DeepSeek</strong><span>chat completions</span></div>
-                <div class="client-item"><strong>Arnis</strong><span>chat completions</span></div>
-                <div class="client-item"><strong>SDK OpenAI</strong><span>baseURL /v1</span></div>
-                <div class="client-item"><strong>OpenWebUI · Voz</strong><span>POST /v1/audio/transcriptions</span></div>
-              </div>
-              <div class="code-block">
-                <div class="code-head">
-                  <span>config base</span>
-                  <button class="copy-btn subtle" id="copyClientSnippet" type="button">Copiar</button>
-                </div>
-                <pre id="clientSnippet"><code>baseURL: "http://127.0.0.1:8790/v1"
-apiKey:  "$DEEPAI_PROXY_TOKEN"
-model:   "deepai/glm-5.3-flash"</code></pre>
-              </div>
-              <p class="mini-note client-note">O proxy aceita o id com ou sem o prefixo <code>deepai/</code>. O cache de contexto é ativado automaticamente por conversa. Áudio de voz usa <code>webm/opus</code> ou <code>mp4</code>, até 8 MB.</p>
-            </section>
-          </div>
-        </section>
-      </main>
 
-      <footer class="foot">
-        <span>DeepAI Proxy · credenciais criptografadas em <code>data/</code></span>
-        <span class="foot-dot"></span>
-        <span>Escuta apenas em <code>127.0.0.1</code></span>
-      </footer>
+              <div class="ctx-grid">
+                <div class="field">
+                  <label for="cfgCtxDetect">Detectar compactação do cliente</label>
+                  <select class="input" id="cfgCtxDetect">
+                    <option value="on">Ativado — registra quando o cliente compactou</option>
+                    <option value="off">Desativado — não analisa o histórico</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-notes">
+                <div class="note-row">
+                  <strong>Nada é removido</strong>
+                  <p>Mensagens, resultados de tool e o resumo do cliente vão para o upstream exatamente como chegaram. Não há janela deslizante, poda por orçamento nem erro de “contexto excedido” gerado pelo proxy.</p>
+                </div>
+                <div class="note-row">
+                  <strong>Compactação é do cliente</strong>
+                  <p>O proxy detecta os marcadores de compactação (checkpoint do OpenCode, resumo de sessão continuada) e assume que o histórico já foi reduzido pelo cliente. A detecção é apenas informativa.</p>
+                </div>
+              </div>
+
+              <div class="form-actions">
+                <button class="btn btn-primary" id="btnSaveContextSettings" type="button">Salvar configurações</button>
+              </div>
+            </article>
+          </section>
+
+          <footer class="page-foot">
+            <span>DeepAI Proxy · execução local</span>
+            <span>Dados persistidos em <code>data/</code></span>
+          </footer>
+        </main>
+      </div>
     </div>
 
-    <div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gateTitle">
-      <div class="gate-card glass">
-        <div class="gate-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5" /><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7" /></svg>
+    <!-- Toasts -->
+    <div class="toasts" id="toastContainer" aria-live="polite" aria-atomic="false"></div>
+
+    <!-- Command palette -->
+    <div class="palette" id="palette" hidden>
+      <div class="palette-panel" role="dialog" aria-modal="true" aria-label="Comandos">
+        <div class="palette-head">
+          <svg class="icon"><use href="#i-search" /></svg>
+          <input id="paletteInput" type="text" placeholder="Buscar páginas, ações…" autocomplete="off" spellcheck="false" aria-label="Buscar comandos" />
+          <kbd>Esc</kbd>
         </div>
-        <span class="card-kicker" id="gateKicker">Primeiro acesso</span>
-        <h2 id="gateTitle">Crie sua senha</h2>
-        <p id="gateSubtitle">Proteja o painel e as credenciais das contas com uma senha de administrador.</p>
-        <form id="gateForm" autocomplete="off">
-          <div id="setupFields" class="hidden">
-            <label for="setupPassword">Senha de administrador</label>
-            <div class="copy-field password-field">
-              <input id="setupPassword" type="password" minlength="8" maxlength="200" placeholder="Mínimo de 8 caracteres" autocomplete="new-password" />
-              <button class="icon-btn inline-icon password-toggle" data-target="setupPassword" type="button" title="Mostrar senha" aria-label="Mostrar senha">
-                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
-              </button>
-            </div>
-            <div class="password-tools">
-              <button class="btn btn-ghost btn-sm" id="generatePassword" type="button">Gerar senha forte</button>
-              <button class="btn btn-ghost btn-sm hidden" id="copyGenerated" type="button">Copiar senha</button>
-            </div>
-            <div class="strength" id="strength" aria-hidden="true"><i></i><i></i><i></i></div>
-            <label for="setupConfirm">Confirmar senha</label>
-            <div class="copy-field password-field">
-              <input id="setupConfirm" type="password" minlength="8" maxlength="200" placeholder="Repita a senha" autocomplete="new-password" />
-              <button class="icon-btn inline-icon password-toggle" data-target="setupConfirm" type="button" title="Mostrar senha" aria-label="Mostrar senha">
-                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
-              </button>
-            </div>
-            <p class="field-note">Guarde esta senha. Ela protege o painel e as credenciais das contas.</p>
-          </div>
-          <div id="loginFields" class="hidden">
-            <label for="loginPassword">Senha de administrador</label>
-            <div class="copy-field password-field">
-              <input id="loginPassword" type="password" placeholder="Sua senha" autocomplete="current-password" />
-              <button class="icon-btn inline-icon password-toggle" data-target="loginPassword" type="button" title="Mostrar senha" aria-label="Mostrar senha">
-                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
-              </button>
-            </div>
-          </div>
-          <button class="btn btn-primary" id="gateSubmit" type="submit">Criar senha e entrar</button>
-        </form>
-        <p class="gate-error" id="gateError" role="alert"></p>
-        <div class="gate-hint hidden" id="gateForgot">
-          <span>Esqueceu a senha?</span>
-          <button class="btn btn-ghost btn-sm" id="gateReset" type="button">Resetar senha</button>
-          <span class="gate-hint-detail">Apaga a senha atual e pede uma nova. Funciona apenas no computador que roda o proxy e encerra as sessões abertas.</span>
+        <div class="palette-list" id="paletteList" role="listbox" aria-label="Comandos disponíveis"></div>
+        <div class="palette-empty" id="paletteEmpty" hidden>Nenhum comando encontrado.</div>
+      </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal" id="modal" hidden>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-head">
+          <h2 id="modalTitle">Confirmar</h2>
+          <button class="icon-btn" id="modalClose" type="button" aria-label="Fechar">
+            <svg class="icon"><use href="#i-x" /></svg>
+          </button>
+        </div>
+        <p id="modalDesc">Deseja continuar?</p>
+        <div class="field" id="modalField" hidden>
+          <label for="modalInput">Valor</label>
+          <input class="input" id="modalInput" type="text" autocomplete="off" />
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="modalCancel" type="button">Cancelar</button>
+          <button class="btn btn-primary" id="modalConfirm" type="button">Confirmar</button>
         </div>
       </div>
     </div>
 
-    <dialog class="modal glass" id="confirmDialog">
-      <h2 id="confirmTitle">Confirmar</h2>
-      <p id="confirmMessage"></p>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" id="confirmCancel" type="button">Cancelar</button>
-        <button class="btn btn-danger" id="confirmOk" type="button">Confirmar</button>
-      </div>
-    </dialog>
+    <noscript>
+      <div class="noscript">Ative o JavaScript para usar o painel do DeepAI Proxy.</div>
+    </noscript>
 
-    <dialog class="modal glass update-modal" id="updateDialog">
-      <div class="update-modal-head">
-        <div class="update-badge" id="updateBadge">Atualização</div>
-        <h2 id="updateTitle">Nova versão disponível</h2>
-        <p id="updateMessage" class="muted">Uma nova versão do proxy está disponível no GitHub.</p>
-      </div>
-      <div class="update-meta" id="updateMeta"></div>
-      <div class="update-notes hidden" id="updateNotesWrap">
-        <div class="update-notes-title">O que mudou</div>
-        <pre id="updateNotes"></pre>
-      </div>
-      <div class="update-progress hidden" id="updateProgress" aria-live="polite">
-        <span class="spinner" aria-hidden="true"></span>
-        <span id="updateProgressText">Atualizando...</span>
-      </div>
-      <p class="update-error hidden" id="updateError"></p>
-      <div class="modal-actions" id="updateActions">
-        <button class="btn btn-ghost" id="updateLaterBtn" type="button">Depois</button>
-        <a class="btn btn-ghost hidden" id="updateReleaseBtn" href="#" target="_blank" rel="noopener noreferrer">Ver no GitHub</a>
-        <button class="btn btn-primary" id="updateNowBtn" type="button">Atualizar agora</button>
-      </div>
-    </dialog>
-
-    <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+    <script src="/app.js"></script>
   </body>
 </html>

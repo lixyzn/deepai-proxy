@@ -1,6 +1,10 @@
-data/
 node_modules/
+data/
 *.log
+.env
+.env.*
+.DS_Store
+Thumbs.db
 
 # Reverse-engineering artifacts / local dumps
 deepai-extracted/

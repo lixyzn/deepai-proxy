@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepAI Proxy - Login</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; line-height: 1.4; color: #111; background: #fff; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    .row { margin: 12px 0; }
+    button { padding: 8px 12px; cursor: pointer; }
+    #linkBox { margin-top: 8px; word-break: break-all; }
+    #status { margin-top: 12px; white-space: pre-wrap; }
+    .muted { color: #555; }
+    a { color: #0645ad; }
+  </style>
+</head>
+<body>
+  <h1>DeepAI Proxy - Login</h1>
+
+  <div class="row">
+    <button id="loginBtn" type="button">Gerar link de login</button>
+    <button id="cancelBtn" type="button" style="display:none">Cancelar</button>
+    <button id="refreshBtn" type="button">Atualizar</button>
+  </div>
+
+  <div class="row">
+    <div class="muted">Link de autenticação:</div>
+    <div id="linkBox">-</div>
+  </div>
+
+  <div class="row">
+    <div class="muted">Status:</div>
+    <div id="status">Carregando...</div>
+  </div>
+
+  <script>
+    const loginBtn = document.getElementById("loginBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const linkBox = document.getElementById("linkBox");
+    const statusEl = document.getElementById("status");
+    let poll = null;
+
+    async function api(path, opts) {
+      const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+      return data;
+    }
+
+    function render(auth) {
+      const pending = !!(auth && auth.pending);
+      loginBtn.disabled = pending;
+      cancelBtn.style.display = pending ? "" : "none";
+
+      if (auth && auth.loginUrl) {
+        const url = String(auth.loginUrl);
+        linkBox.innerHTML = '<a href="' + url.replace(/"/g, "&quot;") + '" target="_blank" rel="noopener noreferrer">' + url.replace(/</g, "&lt;") + '</a>';
+      } else {
+        linkBox.textContent = "-";
+      }
+
+      const lines = [];
+      lines.push("Pendente: " + (pending ? "sim" : "não"));
+      if (auth && auth.activeAccountId) lines.push("Conta ativa: " + auth.activeAccountId);
+      else lines.push("Conta ativa: nenhuma");
+      if (auth && auth.lastError) lines.push("Erro: " + auth.lastError);
+      if (auth && auth.savedAccount) lines.push("Última conta salva: " + (auth.savedAccount.label || auth.savedAccount.id || ""));
+      statusEl.textContent = lines.join("\n");
+
+      if (pending) { if (!poll) poll = setInterval(refresh, 2000); }
+      else { if (poll) { clearInterval(poll); poll = null; } }
+    }
+
+    async function refresh() {
+      try {
+        const res = await api("/api/auth/status");
+        render(res.auth || {});
+      } catch (e) {
+        statusEl.textContent = "Erro ao consultar status: " + e.message;
+      }
+    }
+
+    loginBtn.addEventListener("click", async () => {
+      loginBtn.disabled = true;
+      statusEl.textContent = "Gerando link...";
+      try {
+        const res = await api("/api/auth/login", { method: "POST", body: "{}" });
+        render(res.auth || {});
+      } catch (e) {
+        statusEl.textContent = "Erro ao iniciar login: " + e.message;
+        loginBtn.disabled = false;
+      }
+    });
+
+    cancelBtn.addEventListener("click", async () => {
+      try { await api("/api/auth/cancel", { method: "POST", body: "{}" }); } catch (_) {}
+      refresh();
+    });
+
+    refreshBtn.addEventListener("click", refresh);
+    refresh();
+  </script>
+</body>
+</html>

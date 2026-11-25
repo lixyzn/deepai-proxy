@@ -1,2522 +1,2015 @@
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+/* ==========================================================================
+   DeepAI Proxy — Painel
+   Zero dependências. Consome a API local em /api/*.
+   ========================================================================== */
+(() => {
+  "use strict";
 
-const STORAGE_KEY = "deepai-proxy-session";
-const LOGIN_STORAGE = "deepai-proxy-login";
-const PASSWORD_CHARSET =
-  "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*+-_=?";
-const state = {
-  sessionToken: "",
-  gateMode: "login",
-  baseUrl: "",
-  proxyToken: "",
-  accounts: [],
-  activeAccountId: null,
-  telemetry: { summary: {}, accounts: {}, requests: [], updatedAt: null },
-  conversations: { sessions: [], stats: {}, updatedAt: null },
-  models: {
-    data: [],
-    counts: {},
-    account: null,
-    fetchedAt: null,
-    default: null,
-    loaded: false,
-    loading: false,
-    filter: "all",
-    provider: "all",
-    sort: "default",
-    providerSignature: "",
-    search: "",
-  },
-  activeTab: "login",
-  login: null,
-  countdownTimer: null,
-  pollTimer: null,
-  healthTimer: null,
-  telemetryTimer: null,
-};
+  const $ = (id) => document.getElementById(id);
+  const qs = (sel, root = document) => root.querySelector(sel);
+  const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const els = {
-  app: $("#app"),
-  gate: $("#gate"),
-  gateForm: $("#gateForm"),
-  gateKicker: $("#gateKicker"),
-  gateTitle: $("#gateTitle"),
-  gateSubtitle: $("#gateSubtitle"),
-  gateSubmit: $("#gateSubmit"),
-  gateForgot: $("#gateForgot"),
-  gateReset: $("#gateReset"),
-  setupFields: $("#setupFields"),
-  loginFields: $("#loginFields"),
-  setupPassword: $("#setupPassword"),
-  setupConfirm: $("#setupConfirm"),
-  loginPassword: $("#loginPassword"),
-  generatePassword: $("#generatePassword"),
-  copyGenerated: $("#copyGenerated"),
-  strength: $("#strength"),
-  gateError: $("#gateError"),
-  lockBtn: $("#lockBtn"),
-  serverStatus: $("#serverStatus"),
-  loginStart: $("#loginStart"),
-  linkPanel: $("#linkPanel"),
-  startBtn: $("#startBtn"),
-  restartBtn: $("#restartBtn"),
-  loginUrl: $("#loginUrl"),
-  copyLinkBtn: $("#copyLinkBtn"),
-  openLinkBtn: $("#openLinkBtn"),
-  waiting: $("#waiting"),
-  waitSpinner: $("#waitSpinner"),
-  waitSuccess: $("#waitSuccess"),
-  waitTitle: $("#waitTitle"),
-  waitSub: $("#waitSub"),
-  countdown: $("#countdown"),
-  callbackInput: $("#callbackInput"),
-  completeBtn: $("#completeBtn"),
-  apiKeyInput: $("#apiKeyInput"),
-  importBtn: $("#importBtn"),
-  baseUrl: $("#baseUrl"),
-  proxyToken: $("#proxyToken"),
-  revealBtn: $("#revealBtn"),
-  snippet: $("#snippet code"),
-  copySnippet: $("#copySnippet"),
-  rotateBtn: $("#rotateBtn"),
-  accountCount: $("#accountCount"),
-  accountsGrid: $("#accountsGrid"),
-  emptyState: $("#emptyState"),
-  metricRequests: $("#metricRequests"),
-  metricRequestsHint: $("#metricRequestsHint"),
-  metricSuccess: $("#metricSuccess"),
-  metricSuccessHint: $("#metricSuccessHint"),
-  metricLatency: $("#metricLatency"),
-  metricLatencyHint: $("#metricLatencyHint"),
-  metricTokens: $("#metricTokens"),
-  metricTokensHint: $("#metricTokensHint"),
-  metricCache: $("#metricCache"),
-  metricCacheHint: $("#metricCacheHint"),
-  metricTheos: $("#metricTheos"),
-  metricTheosHint: $("#metricTheosHint"),
-  telemetryUpdated: $("#telemetryUpdated"),
-  refreshTelemetry: $("#refreshTelemetry"),
-  clearTelemetry: $("#clearTelemetry"),
-  activityWrap: $("#activityWrap"),
-  activityBody: $("#activityBody"),
-  activityEmpty: $("#activityEmpty"),
-  conversationsUpdated: $("#conversationsUpdated"),
-  conversationSessions: $("#conversationSessions"),
-  conversationMessages: $("#conversationMessages"),
-  conversationRestored: $("#conversationRestored"),
-  conversationBytes: $("#conversationBytes"),
-  conversationList: $("#conversationList"),
-  conversationsEmpty: $("#conversationsEmpty"),
-  clearConversations: $("#clearConversations"),
-  tabs: $$(".tab"),
-  views: $$(".tab-view"),
-  chartRequests: $("#chartRequests"),
-  chartRequestsNote: $("#chartRequestsNote"),
-  chartLatency: $("#chartLatency"),
-  chartLatencyNote: $("#chartLatencyNote"),
-  chartModels: $("#chartModels"),
-  chartModelsNote: $("#chartModelsNote"),
-  modelsGrid: $("#modelsGrid"),
-  modelsEmpty: $("#modelsEmpty"),
-  modelsSummary: $("#modelsSummary"),
-  modelsUpdated: $("#modelsUpdated"),
-  refreshModels: $("#refreshModels"),
-  modelSearch: $("#modelSearch"),
-  modelProvider: $("#modelProvider"),
-  modelSort: $("#modelSort"),
-  modelFilters: $$("#modelFilters .chip"),
-  countAll: $("#countAll"),
-  countFree: $("#countFree"),
-  countPaid: $("#countPaid"),
-  countPremier: $("#countPremier"),
-  clientSnippet: $("#clientSnippet code"),
-  copyClientSnippet: $("#copyClientSnippet"),
-  toasts: $("#toasts"),
-  confirmDialog: $("#confirmDialog"),
-  confirmTitle: $("#confirmTitle"),
-  confirmMessage: $("#confirmMessage"),
-  confirmOk: $("#confirmOk"),
-  confirmCancel: $("#confirmCancel"),
-  steps: $("#steps .step"),
-  updateDialog: $("#updateDialog"),
-  updateBadge: $("#updateBadge"),
-  updateTitle: $("#updateTitle"),
-  updateMessage: $("#updateMessage"),
-  updateMeta: $("#updateMeta"),
-  updateNotesWrap: $("#updateNotesWrap"),
-  updateNotes: $("#updateNotes"),
-  updateProgress: $("#updateProgress"),
-  updateProgressText: $("#updateProgressText"),
-  updateError: $("#updateError"),
-  updateActions: $("#updateActions"),
-  updateLaterBtn: $("#updateLaterBtn"),
-  updateReleaseBtn: $("#updateReleaseBtn"),
-  updateNowBtn: $("#updateNowBtn"),
-};
-
-
-/* ---------- update ---------- */
-
-const UPDATE_DISMISS_KEY = "deepai-proxy-update-dismissed";
-let updateCheckPromise = null;
-let pendingUpdateVersion = null;
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function showUpdateDialog(data) {
-  if (!els.updateDialog) return;
-  const current = data.currentVersion || "?";
-  const latest = data.latestVersion || "?";
-  const release = data.release || {};
-  pendingUpdateVersion = latest;
-
-  els.updateBadge.textContent = "Atualização disponível";
-  els.updateTitle.textContent = `Nova versão v${latest}`;
-  els.updateMessage.textContent =
-    "Uma nova versão do proxy está disponível no GitHub. A atualização é opcional — se quiser, você pode continuar na versão atual.";
-  els.updateMeta.innerHTML = `
-    <span class="pill">Atual: <strong>v${escapeHtml(current)}</strong></span>
-    <span class="pill">Nova: <strong>v${escapeHtml(latest)}</strong></span>
-  `;
-
-  const notes = String(release.notes || "").trim();
-  els.updateNotes.textContent = notes;
-  els.updateNotesWrap.classList.toggle("hidden", !notes);
-
-  const url = release.url || (data.repo ? `https://github.com/${data.repo}` : "");
-  if (url) {
-    els.updateReleaseBtn.href = url;
-    els.updateReleaseBtn.classList.remove("hidden");
-  } else {
-    els.updateReleaseBtn.removeAttribute("href");
-    els.updateReleaseBtn.classList.add("hidden");
-  }
-
-  els.updateError.textContent = "";
-  els.updateError.classList.add("hidden");
-  els.updateProgress.classList.add("hidden");
-  els.updateProgressText.textContent = "Atualizando...";
-  els.updateActions.classList.remove("hidden");
-  els.updateNowBtn.disabled = false;
-  els.updateLaterBtn.disabled = false;
-  els.updateNowBtn.classList.remove("hidden");
-  els.updateLaterBtn.textContent = "Depois";
-  els.updateNowBtn.textContent = "Atualizar agora";
-
-  if (!els.updateDialog.open) els.updateDialog.showModal();
-}
-
-async function waitForServerAndReload() {
-  const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1500));
-    try {
-      const res = await fetch("/health", { cache: "no-store" });
-      if (res.ok) {
-        els.updateProgressText.textContent = "Servidor reiniciado. Recarregando...";
-        setTimeout(() => window.location.reload(), 600);
-        return;
-      }
-    } catch {
-      // still restarting
-    }
-  }
-  els.updateProgressText.textContent =
-    "O servidor demorou para voltar. Recarregue a página manualmente.";
-  els.updateActions.classList.remove("hidden");
-  els.updateNowBtn.classList.add("hidden");
-  els.updateLaterBtn.textContent = "Fechar";
-  els.updateLaterBtn.disabled = false;
-}
-
-async function applyUpdate() {
-  if (!state.sessionToken) return;
-  els.updateError.textContent = "";
-  els.updateError.classList.add("hidden");
-  els.updateActions.classList.add("hidden");
-  els.updateProgress.classList.remove("hidden");
-  els.updateProgressText.textContent = "Baixando atualização do GitHub...";
-  els.updateNowBtn.disabled = true;
-  els.updateLaterBtn.disabled = true;
-
-  try {
-    const result = await adminFetch("/admin/api/update/apply", { method: "POST" });
-    if (!result?.updated) {
-      els.updateProgress.classList.add("hidden");
-      els.updateActions.classList.remove("hidden");
-      els.updateNowBtn.disabled = false;
-      els.updateLaterBtn.disabled = false;
-      toast("info", result?.message || "O proxy já está atualizado.");
-      return;
-    }
-    localStorage.removeItem(UPDATE_DISMISS_KEY);
-    els.updateProgressText.textContent = "Atualização aplicada. Reiniciando o servidor...";
-    await waitForServerAndReload();
-  } catch (err) {
-    els.updateProgress.classList.add("hidden");
-    els.updateActions.classList.remove("hidden");
-    els.updateNowBtn.disabled = false;
-    els.updateLaterBtn.disabled = false;
-    els.updateError.textContent = err.message || "Falha ao atualizar.";
-    els.updateError.classList.remove("hidden");
-  }
-}
-
-async function checkForUpdates({ force = false, silent = true } = {}) {
-  if (!state.sessionToken) return null;
-  if (updateCheckPromise) return updateCheckPromise;
-
-  updateCheckPromise = (async () => {
-    try {
-      const qs = force ? "?force=1" : "";
-      const data = await adminFetch(`/admin/api/update${qs}`);
-      if (data?.hasUpdate) {
-        const dismissed = localStorage.getItem(UPDATE_DISMISS_KEY) || "";
-        if (force || dismissed !== data.latestVersion) {
-          showUpdateDialog(data);
-        }
-      } else if (force && !silent) {
-        toast("success", data?.error ? `Não foi possível verificar: ${data.error}` : "Você já está na versão mais recente.");
-      } else if (!force && data?.error && !silent) {
-        toast("error", data.error);
-      }
-      return data;
-    } catch (err) {
-      if (!silent) toast("error", err.message || "Falha ao verificar atualização.");
-      return null;
-    } finally {
-      updateCheckPromise = null;
-    }
-  })();
-
-  return updateCheckPromise;
-}
-
-function dismissUpdateDialog() {
-  if (pendingUpdateVersion) {
-    localStorage.setItem(UPDATE_DISMISS_KEY, pendingUpdateVersion);
-  }
-  if (els.updateDialog?.open) els.updateDialog.close();
-}
-
-/* ---------- boot ---------- */
-
-async function init() {
-  bindEvents();
-  startHealthLoop();
-  localStorage.removeItem("deepai-proxy-admin");
-  const token = localStorage.getItem(STORAGE_KEY) || "";
-  if (!token) {
-    await showGate();
-    return;
-  }
-  state.sessionToken = token;
-  try {
-    await adminFetch("/admin/api/session");
-    await refreshState();
-    hideGate();
-    restorePendingLogin();
-    applyTab(initialTab(), { persist: false });
-    checkForUpdates({ silent: true });
-  } catch {
-    await showGate();
-  }
-}
-
-/* ---------- rede ---------- */
-
-async function adminFetch(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  headers.set("Authorization", `Bearer ${state.sessionToken}`);
-  if (options.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  const response = await fetch(path, { ...options, headers });
-  const text = await response.text();
-  let payload = null;
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = { error: text };
-    }
-  }
-  if (response.status === 401) {
-    lock();
-    throw new Error("Sessão expirada. Entre com sua senha novamente.");
-  }
-  if (!response.ok) {
-    const message =
-      (payload && (payload.error || payload.message)) ||
-      `Falha na requisição (${response.status}).`;
-    throw new Error(typeof message === "string" ? message : "Falha na requisição.");
-  }
-  return payload;
-}
-
-async function refreshState() {
-  const [data, telemetry, conversations] = await Promise.all([
-    adminFetch("/admin/api/state"),
-    adminFetch("/admin/api/telemetry").catch(() => null),
-    adminFetch("/admin/api/conversations").catch(() => null),
-  ]);
-  state.baseUrl = data.baseUrl;
-  state.proxyToken = data.proxyToken;
-  const previousActive = state.activeAccountId;
-  state.accounts = Array.isArray(data.accounts) ? data.accounts : [];
-  state.activeAccountId = data.activeAccountId;
-  state.telemetry = normalizeTelemetry(telemetry);
-  state.conversations = normalizeConversations(conversations);
-
-  if (previousActive && previousActive !== data.activeAccountId) {
-    state.models = {
-      ...state.models,
-      data: [],
-      counts: {},
-      account: null,
-      fetchedAt: null,
-      loaded: false,
-    };
-    if (state.activeTab === "models") loadModels({ quiet: true });
-  }
-
-  if (els.baseUrl.value !== data.baseUrl) {
-    els.baseUrl.value = data.baseUrl;
-    els.snippet.textContent = buildSnippet(data.baseUrl);
-  }
-  if (els.proxyToken.value !== data.proxyToken) {
-    els.proxyToken.value = data.proxyToken;
-  }
-  if (els.clientSnippet) {
-    els.clientSnippet.textContent = buildClientSnippet(data.baseUrl);
-  }
-  renderTelemetry();
-  renderConversations();
-  renderAccounts();
-}
-
-function validTab(value) {
-  return ["login", "panel", "models", "access"].includes(value) ? value : null;
-}
-
-function initialTab() {
-  const hash = validTab(location.hash.replace(/^#/, ""));
-  if (hash) return hash;
-  return state.accounts.length ? "panel" : "login";
-}
-
-function applyTab(tab, { persist = true } = {}) {
-  const next = validTab(tab) || "login";
-  state.activeTab = next;
-  for (const button of els.tabs) {
-    const active = button.dataset.tab === next;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", String(active));
-  }
-  for (const view of els.views) {
-    view.classList.toggle("hidden", view.dataset.view !== next);
-  }
-  if (persist) {
-    try {
-      history.replaceState(null, "", `#${next}`);
-    } catch {
-      // ambiente sem history
-    }
-  }
-  if (next === "panel") {
-    refreshTelemetry();
-    startTelemetryLoop();
-  } else {
-    stopTelemetryLoop();
-  }
-  if (next === "models" && state.sessionToken) {
-    if (!state.models.loaded) loadModels({ quiet: true });
-    else renderModels();
-  }
-}
-
-function normalizeTelemetry(data) {
-  return {
-    summary: data?.summary && typeof data.summary === "object" ? data.summary : {},
-    accounts: data?.accounts && typeof data.accounts === "object" ? data.accounts : {},
-    requests: Array.isArray(data?.requests) ? data.requests : [],
-    updatedAt: typeof data?.updatedAt === "string" ? data.updatedAt : null,
+  const ICONS = {
+    ok: "i-check",
+    err: "i-alert",
+    info: "i-info",
   };
-}
 
-function normalizeConversations(data) {
-  return {
-    sessions: Array.isArray(data?.sessions) ? data.sessions : [],
-    stats: data?.stats && typeof data.stats === "object" ? data.stats : {},
-    updatedAt: typeof data?.updatedAt === "string" ? data.updatedAt : null,
+  const RANGE_LABELS = {
+    "1h": "Última hora",
+    "24h": "Últimas 24 horas",
+    "7d": "Últimos 7 dias",
+    all: "Todo o período",
   };
-}
 
-async function refreshTelemetry({ quiet = true } = {}) {
-  if (!state.sessionToken) return;
-  try {
-    // Atualiza contas (saldo/allowance) e telemetria no mesmo ciclo.
-    await refreshState();
-  } catch (error) {
-    if (!quiet) toast("error", error.message);
-  }
-}
+  const state = {
+    tab: "dashboard",
+    range: "1h",
+    autoRefresh: true,
+    healthOk: null,
+    metrics: null,
+    metricsError: null,
+    accounts: [],
+    activeAccountId: null,
+    models: [],
+    modelsMeta: { total: 0, free: 0, paid: 0 },
+    modelsSearch: "",
+    modelsTier: "all",
+    config: {
+      proxyApiKey: "",
+      requireApiKey: true,
+      rotationStrategy: "round-robin",
+      defaultModel: "",
+    },
+    codeTab: "curl",
+    chartSeries: { requests: true, latency: true },
+    sort: { key: "timestamp", dir: "desc" },
+    authPollTimer: null,
+    authTickTimer: null,
+    refreshTimer: null,
+    paletteIndex: 0,
+    paletteItems: [],
+    paletteOpen: false,
+    modalResolve: null,
+  };
 
-function startTelemetryLoop() {
-  stopTelemetryLoop();
-  if (state.activeTab !== "panel") return;
-  state.telemetryTimer = setInterval(() => {
-    if (document.visibilityState === "visible") refreshTelemetry();
-  }, 10000);
-}
+  const TAB_INFO = {
+    dashboard: { title: "Dashboard", subtitle: "Tráfego, latência e saúde do gateway" },
+    accounts: { title: "Contas DeepAI", subtitle: "Conectar, rotacionar e monitorar contas" },
+    models: { title: "Modelos", subtitle: "Catálogo disponível no endpoint OpenAI" },
+    settings: { title: "Configurações", subtitle: "Segurança, integração e gerenciamento de contexto" },
+  };
 
-function stopTelemetryLoop() {
-  clearInterval(state.telemetryTimer);
-  state.telemetryTimer = null;
-}
+  /* ------------------------------------------------------------------ */
+  /* Utilidades                                                          */
+  /* ------------------------------------------------------------------ */
 
-function startHealthLoop() {
-  const check = async () => {
+  async function api(path, { method = "GET", body } = {}) {
+    const opts = { method, headers: { Accept: "application/json" } };
+    if (body !== undefined) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    let res;
     try {
-      const response = await fetch("/health", { cache: "no-store" });
-      setServerHealth(response.ok);
+      res = await fetch(path.startsWith("/") ? path : `/api/${path}`, opts);
     } catch {
-      setServerHealth(false);
+      const err = new Error("Falha de rede — o proxy local não respondeu.");
+      err.offline = true;
+      throw err;
     }
-  };
-  check();
-  clearInterval(state.healthTimer);
-  state.healthTimer = setInterval(check, 15000);
-}
-
-function setServerHealth(online) {
-  els.serverStatus.classList.toggle("offline", !online);
-  els.serverStatus.querySelector("span").textContent = online ? "Online" : "Offline";
-}
-
-/* ---------- gate ---------- */
-
-async function showGate() {
-  els.gate.classList.remove("hidden");
-  els.app.setAttribute("aria-hidden", "true");
-  els.gateError.textContent = "";
-
-  let initialized = true;
-  try {
-    const response = await fetch("/admin/api/setup", { cache: "no-store" });
-    const data = await response.json();
-    initialized = Boolean(data.initialized);
-  } catch {
-    // se a rede falhar, mostra o login normal
-  }
-  setGateMode(initialized ? "login" : "setup");
-}
-
-function setGateMode(mode) {
-  state.gateMode = mode;
-  const setup = mode === "setup";
-  els.setupFields.classList.toggle("hidden", !setup);
-  els.loginFields.classList.toggle("hidden", setup);
-  els.gateForgot.classList.toggle("hidden", setup);
-  els.gateKicker.textContent = setup ? "Primeiro acesso" : "Acesso restrito";
-  els.gateTitle.textContent = setup ? "Crie sua senha" : "Entrar no painel";
-  els.gateSubtitle.textContent = setup
-    ? "Proteja o painel e as credenciais das contas com uma senha de administrador."
-    : "Digite a senha de administrador para acessar as contas e a API do proxy.";
-  els.gateSubmit.textContent = setup ? "Criar senha e entrar" : "Entrar";
-  els.gateError.textContent = "";
-  els.setupPassword.value = "";
-  els.setupConfirm.value = "";
-  els.loginPassword.value = "";
-  els.setupPassword.type = "password";
-  els.setupConfirm.type = "password";
-  els.loginPassword.type = "password";
-  els.copyGenerated.classList.add("hidden");
-  syncPasswordToggles();
-  renderStrength("");
-  setTimeout(() => {
-    (setup ? els.setupPassword : els.loginPassword).focus();
-  }, 60);
-}
-
-function hideGate() {
-  els.gate.classList.add("hidden");
-  els.app.removeAttribute("aria-hidden");
-}
-
-async function lock() {
-  const token = state.sessionToken;
-  state.sessionToken = "";
-  localStorage.removeItem(STORAGE_KEY);
-  clearLoginTimers();
-  stopTelemetryLoop();
-  if (token) {
-    fetch("/admin/api/logout", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    }).catch(() => {});
-  }
-  await showGate();
-}
-
-async function submitGate(event) {
-  event.preventDefault();
-  els.gateError.textContent = "";
-
-  const setup = state.gateMode === "setup";
-  let body;
-  if (setup) {
-    const password = els.setupPassword.value;
-    if (password.length < 8) {
-      els.gateError.textContent = "A senha precisa ter pelo menos 8 caracteres.";
-      return;
-    }
-    if (password !== els.setupConfirm.value) {
-      els.gateError.textContent = "As senhas não conferem.";
-      return;
-    }
-    body = { password };
-  } else {
-    const password = els.loginPassword.value;
-    if (!password) {
-      els.gateError.textContent = "Informe sua senha.";
-      return;
-    }
-    body = { password };
-  }
-
-  const previousLabel = els.gateSubmit.textContent;
-  els.gateSubmit.disabled = true;
-  els.gateSubmit.textContent = setup ? "Criando senha…" : "Entrando…";
-
-  try {
-    const response = await fetch(setup ? "/admin/api/setup" : "/admin/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || "Não foi possível entrar no painel.");
-    }
-    await activateSession(data.sessionToken);
-    toast(
-      "success",
-      setup
-        ? "Senha criada. Guarde-a em local seguro."
-        : "Painel desbloqueado.",
-    );
-  } catch (error) {
-    els.gateError.textContent = error.message;
-    if (/primeiro acesso|já foi criada|já está configurada/i.test(error.message)) {
-      await showGate();
-    }
-  } finally {
-    els.gateSubmit.disabled = false;
-    els.gateSubmit.textContent = previousLabel;
-  }
-}
-
-async function resetPasswordFromGate() {
-  const confirmed = await confirmAction({
-    title: "Resetar senha de administrador?",
-    message:
-      "A senha atual será apagada e você poderá criar uma nova em seguida. As sessões abertas serão encerradas. Isso só funciona no computador que roda o proxy.",
-    confirmLabel: "Resetar senha",
-  });
-  if (!confirmed) return;
-
-  els.gateError.textContent = "";
-  els.gateReset.disabled = true;
-  try {
-    const response = await fetch("/admin/api/reset-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: "RESETAR" }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || "Não foi possível resetar a senha.");
-    }
-    state.sessionToken = "";
-    localStorage.removeItem(STORAGE_KEY);
-    setGateMode("setup");
-    els.gateSubtitle.textContent =
-      "Senha anterior apagada. Crie uma nova senha de administrador.";
-    toast("success", "Senha resetada. Crie uma nova agora.");
-  } catch (error) {
-    els.gateError.textContent = error.message;
-  } finally {
-    els.gateReset.disabled = false;
-  }
-}
-
-async function activateSession(token) {
-  state.sessionToken = token;
-  localStorage.setItem(STORAGE_KEY, token);
-  await refreshState();
-  els.setupPassword.value = "";
-  els.setupConfirm.value = "";
-  els.loginPassword.value = "";
-  hideGate();
-  restorePendingLogin();
-  applyTab(initialTab(), { persist: false });
-  checkForUpdates({ silent: true });
-}
-
-function generateStrongPassword() {
-  const bytes = new Uint8Array(20);
-  crypto.getRandomValues(bytes);
-  let password = "";
-  for (const byte of bytes) password += PASSWORD_CHARSET[byte % PASSWORD_CHARSET.length];
-  return password;
-}
-
-function passwordScore(value) {
-  if (!value) return 0;
-  let points = 0;
-  if (value.length >= 8) points += 1;
-  if (value.length >= 12) points += 1;
-  if (value.length >= 16) points += 1;
-  if (/[a-z]/.test(value) && /[A-Z]/.test(value)) points += 1;
-  if (/\d/.test(value)) points += 1;
-  if (/[^a-zA-Z0-9]/.test(value)) points += 1;
-  if (points <= 3) return 1;
-  if (points <= 5) return 2;
-  return 3;
-}
-
-function renderStrength(value) {
-  const score = passwordScore(value);
-  els.strength.className = `strength${score ? ` s${score}` : ""}`;
-}
-
-function syncPasswordToggles() {
-  $$(".password-toggle").forEach((button) => {
-    const input = document.getElementById(button.dataset.target);
-    const showing = input?.type === "text";
-    button.title = showing ? "Ocultar senha" : "Mostrar senha";
-    button.setAttribute("aria-label", showing ? "Ocultar senha" : "Mostrar senha");
-  });
-}
-
-function useGeneratedPassword() {
-  const password = generateStrongPassword();
-  els.setupPassword.value = password;
-  els.setupConfirm.value = password;
-  els.setupPassword.type = "text";
-  els.setupConfirm.type = "text";
-  els.copyGenerated.classList.remove("hidden");
-  syncPasswordToggles();
-  renderStrength(password);
-  els.gateError.textContent = "";
-  toast("success", "Senha forte gerada. Copie e guarde antes de continuar.");
-}
-
-async function copyGeneratedPassword() {
-  const ok = await copyText(els.setupPassword.value);
-  if (!ok) {
-    toast("error", "Não foi possível copiar a senha.");
-    return;
-  }
-  toast("success", "Senha copiada. Guarde-a em local seguro.");
-}
-
-/* ---------- login ---------- */
-
-function setSteps(active, done = []) {
-  els.steps.forEach((step) => {
-    const number = Number(step.dataset.step);
-    step.classList.toggle("active", number === active);
-    step.classList.toggle("done", done.includes(number));
-  });
-}
-
-function resetLoginUi() {
-  clearLoginTimers();
-  clearPersistedLogin();
-  state.login = null;
-  els.linkPanel.classList.add("hidden");
-  els.loginStart.classList.remove("hidden");
-  els.startBtn.disabled = false;
-  els.startBtn.innerHTML = startButtonContent();
-  els.waiting.classList.remove("success", "error");
-  els.waitSuccess.classList.add("hidden");
-  els.waitSpinner.classList.remove("hidden");
-  els.waitTitle.textContent = "Aguardando aprovação";
-  els.waitSub.innerHTML = 'O link expira em <span id="countdown">10:00</span>';
-  els.countdown = $("#countdown");
-  els.loginUrl.value = "";
-  els.callbackInput.value = "";
-  setSteps(1);
-}
-
-function startButtonContent() {
-  return `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M10.5 13.5 13.5 10.5" />
-    <path d="M7.2 16.8 5.4 18.6a3.9 3.9 0 0 1-5.5-5.5l3.6-3.6a3.9 3.9 0 0 1 5.5 0" transform="translate(2.2 -1.2) scale(.82)" />
-    <path d="M16.8 7.2 18.6 5.4a3.9 3.9 0 0 1 5.5 5.5l-3.6 3.6a3.9 3.9 0 0 1-5.5 0" transform="translate(-1.2 2.2) scale(.82)" />
-  </svg> Gerar link de login`;
-}
-
-async function startLogin() {
-  if (state.login) return;
-  els.startBtn.disabled = true;
-  els.startBtn.textContent = "Gerando link…";
-  try {
-    const data = await adminFetch("/admin/api/login/start", {
-      method: "POST",
-      body: "{}",
-    });
-    state.login = {
-      id: data.loginId,
-      url: data.url,
-      expiresAt: Date.parse(data.expiresAt),
-      settled: false,
-    };
-    persistLogin();
-    els.loginStart.classList.add("hidden");
-    els.linkPanel.classList.remove("hidden");
-    els.loginUrl.value = data.url;
-    els.openLinkBtn.href = data.url;
-    els.waiting.classList.remove("success", "error");
-    els.waitSuccess.classList.add("hidden");
-    els.waitSpinner.classList.remove("hidden");
-    els.waitTitle.textContent = "Aguardando aprovação";
-    els.waitSub.innerHTML = 'O link expira em <span id="countdown">10:00</span>';
-    els.countdown = $("#countdown");
-    els.restartBtn.textContent = "Cancelar";
-    setSteps(2, [1]);
-    startCountdown();
-    startPolling();
-  } catch (error) {
-    toast("error", error.message);
-    els.startBtn.disabled = false;
-    els.startBtn.innerHTML = startButtonContent();
-  }
-}
-
-function startCountdown() {
-  clearInterval(state.countdownTimer);
-  const tick = () => {
-    if (!state.login) return;
-    const remaining = Math.max(0, state.login.expiresAt - Date.now());
-    if (els.countdown) els.countdown.textContent = formatDuration(remaining);
-    if (remaining === 0) {
-      clearInterval(state.countdownTimer);
-      if (!state.login.settled) {
-        markLoginError("O link expirou. Gere um novo.");
+    const text = await res.text();
+    let data = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
       }
     }
-  };
-  tick();
-  state.countdownTimer = setInterval(tick, 1000);
-}
-
-function startPolling() {
-  clearInterval(state.pollTimer);
-  const poll = async () => {
-    if (!state.login || state.login.settled) return;
-    try {
-      const status = await adminFetch(`/admin/api/login/${state.login.id}`);
-      handleLoginStatus(status);
-    } catch (error) {
-      if (/não encontrado/i.test(error.message)) {
-        markLoginError("Este login não existe mais. Gere um novo link.");
-      }
+    if (!res.ok || data?.ok === false) {
+      const msg =
+        data?.error?.message ||
+        data?.detail ||
+        (typeof data?.error === "string" ? data.error : null) ||
+        data?.message ||
+        `HTTP ${res.status}`;
+      throw new Error(msg);
     }
-  };
-  state.pollTimer = setInterval(poll, 2000);
-  poll();
-}
-
-function handleLoginStatus(status) {
-  if (!state.login || state.login.settled) return;
-
-  if (status.status === "pending") {
-    els.waitTitle.textContent = "Aguardando aprovação";
-    els.waitSub.innerHTML = 'O link expira em <span id="countdown"></span>';
-    els.countdown = $("#countdown");
-    if (els.countdown && state.login.expiresAt) {
-      els.countdown.textContent = formatDuration(
-        Math.max(0, state.login.expiresAt - Date.now()),
-      );
-    }
-    if (status.error) {
-      els.waitSub.textContent = status.error;
-    }
-    return;
+    return data;
   }
 
-  if (status.status === "exchanging") {
-    els.waitTitle.textContent = "Concluindo login…";
-    els.waitSub.textContent = "Trocando o código pela API key.";
-    return;
+  function esc(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
-  if (status.status === "complete") {
-    state.login.settled = true;
-    clearLoginTimers();
-    clearPersistedLogin();
-    els.waiting.classList.remove("error");
-    els.waiting.classList.add("success");
-    els.waitSpinner.classList.add("hidden");
-    els.waitSuccess.classList.remove("hidden");
-    els.waitTitle.textContent = "Conta conectada";
-    const username = status.account?.username;
-    els.waitSub.textContent = username
-      ? `@${username} adicionada ao proxy.`
-      : "Credencial salva com segurança.";
-    els.restartBtn.textContent = "Adicionar outra conta";
-    setSteps(3, [1, 2]);
-    toast(
-      "success",
-      username ? `Conta @${username} conectada.` : "Conta conectada com sucesso.",
-    );
-    refreshState().catch(() => {});
-    return;
+  function icon(name, cls = "") {
+    return `<svg class="icon ${cls}" aria-hidden="true"><use href="#${name}"/></svg>`;
   }
 
-  if (status.status === "expired") {
-    markLoginError("O link expirou. Gere um novo.");
-    return;
+  const nf = new Intl.NumberFormat("pt-BR");
+  const num = (v) => nf.format(Number(v || 0));
+
+  function compact(n) {
+    const v = Number(n || 0);
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(v >= 10_000_000 ? 0 : 1).replace(".", ",")}M`;
+    if (v >= 10_000) return `${Math.round(v / 1000)}k`;
+    if (v >= 1_000) return `${(v / 1000).toFixed(1).replace(".", ",")}k`;
+    return String(v);
   }
 
-  if (status.status === "cancelled") {
-    resetLoginUi();
-    return;
-  }
-
-  if (status.status === "failed") {
-    markLoginError(status.error || "O login falhou. Gere um novo link.");
-  }
-}
-
-function markLoginError(message) {
-  if (!state.login) return;
-  state.login.settled = true;
-  clearLoginTimers();
-  clearPersistedLogin();
-  els.waiting.classList.remove("success");
-  els.waiting.classList.add("error");
-  els.waitSpinner.classList.remove("hidden");
-  els.waitSuccess.classList.add("hidden");
-  els.waitTitle.textContent = "Não foi possível concluir";
-  els.waitSub.textContent = message;
-  els.restartBtn.textContent = "Gerar novo link";
-  setSteps(2, [1]);
-}
-
-async function cancelLogin() {
-  if (state.login && !state.login.settled) {
-    try {
-      await adminFetch(`/admin/api/login/${state.login.id}`, {
-        method: "DELETE",
-      });
-    } catch {
-      // melhor esforço
-    }
-  }
-  resetLoginUi();
-}
-
-function persistLogin() {
-  if (!state.login) return;
-  try {
-    sessionStorage.setItem(
-      LOGIN_STORAGE,
-      JSON.stringify({
-        id: state.login.id,
-        url: state.login.url,
-        expiresAt: state.login.expiresAt,
-      }),
-    );
-  } catch {
-    // sessão sem storage
-  }
-}
-
-function clearPersistedLogin() {
-  try {
-    sessionStorage.removeItem(LOGIN_STORAGE);
-  } catch {
-    // sessão sem storage
-  }
-}
-
-function restorePendingLogin() {
-  let saved;
-  try {
-    saved = JSON.parse(sessionStorage.getItem(LOGIN_STORAGE) || "null");
-  } catch {
-    saved = null;
-  }
-  if (!saved?.id || !saved?.url || !saved?.expiresAt) return;
-  if (Date.now() >= saved.expiresAt) {
-    clearPersistedLogin();
-    return;
-  }
-
-  state.login = {
-    id: saved.id,
-    url: saved.url,
-    expiresAt: saved.expiresAt,
-    settled: false,
-  };
-  els.loginStart.classList.add("hidden");
-  els.linkPanel.classList.remove("hidden");
-  els.loginUrl.value = saved.url;
-  els.openLinkBtn.href = saved.url;
-  els.waiting.classList.remove("success", "error");
-  els.waitSuccess.classList.add("hidden");
-  els.waitSpinner.classList.remove("hidden");
-  els.waitTitle.textContent = "Aguardando aprovação";
-  els.waitSub.innerHTML = 'O link expira em <span id="countdown">10:00</span>';
-  els.countdown = $("#countdown");
-  els.restartBtn.textContent = "Cancelar";
-  setSteps(2, [1]);
-  startCountdown();
-  startPolling();
-}
-
-async function completeManually() {
-  const value = els.callbackInput.value.trim();
-  if (!value) {
-    toast("error", "Cole o código ou a URL de retorno.");
-    return;
-  }
-  if (!state.login) {
-    toast("error", "Gere um link de login primeiro para vincular o retorno.");
-    return;
-  }
-  els.completeBtn.disabled = true;
-  try {
-    const status = await adminFetch(
-      `/admin/api/login/${state.login.id}/complete`,
-      {
-        method: "POST",
-        body: JSON.stringify({ callbackUrl: value }),
-      },
-    );
-    handleLoginStatus(status);
-    if (status.status === "complete") {
-      els.callbackInput.value = "";
-    } else {
-      toast("error", status.error || "Não foi possível concluir o login.");
-    }
-  } catch (error) {
-    toast("error", error.message);
-  } finally {
-    els.completeBtn.disabled = false;
-  }
-}
-
-/* ---------- contas ---------- */
-
-function formatBytes(value) {
-  const bytes = Math.max(0, Number(value) || 0);
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function renderConversations() {
-  const data = state.conversations ?? {};
-  const stats = data.stats ?? {};
-  const sessions = Array.isArray(data.sessions) ? data.sessions : [];
-  if (!els.conversationSessions) return;
-
-  els.conversationSessions.textContent = formatNumber(stats.sessions ?? sessions.length);
-  els.conversationMessages.textContent = formatNumber(stats.messages ?? 0);
-  els.conversationRestored.textContent = formatNumber(stats.restored ?? 0);
-  els.conversationBytes.textContent = formatBytes(stats.bytes ?? 0);
-  els.conversationsUpdated.textContent = data.updatedAt
-    ? `Atualizado ${formatClock(data.updatedAt)}`
-    : "—";
-
-  els.conversationList.replaceChildren();
-  const recent = sessions.slice(0, 6);
-  els.conversationsEmpty.classList.toggle("hidden", recent.length > 0);
-  for (const session of recent) {
-    const row = document.createElement("div");
-    row.className = "conversation-row";
-
-    const identity = document.createElement("div");
-    identity.className = "conversation-identity";
-    const id = document.createElement("code");
-    id.textContent = session.id;
-    id.title = "ID estável enviado como prompt_cache_key";
-    const model = document.createElement("span");
-    model.textContent = session.model || "modelo não informado";
-    identity.append(id, model);
-
-    const meta = document.createElement("div");
-    meta.className = "conversation-meta";
-    const messageCount = document.createElement("span");
-    messageCount.textContent = `${formatNumber(session.messages || 0)} msg`;
-    const restored = document.createElement("span");
-    restored.textContent = `${formatNumber(session.restored || 0)} restauradas`;
-    restored.title = "Mensagens que o proxy recolocou no contexto após compactação.";
-    const when = document.createElement("span");
-    when.textContent = formatClock(session.updatedAt);
-    meta.append(messageCount, restored, when);
-
-    row.append(identity, meta);
-    els.conversationList.append(row);
-  }
-}
-
-function renderTelemetry() {
-  const summary = state.telemetry.summary ?? {};
-  const requests = state.telemetry.requests ?? [];
-  const requestsCount = Number(summary.requests) || 0;
-  const successes = Number(summary.successes) || 0;
-  const errors = Number(summary.errors) || 0;
-  const cancelled = Number(summary.cancelled) || 0;
-  const completed = Math.max(0, requestsCount - cancelled);
-  const inputTokens = Number(summary.inputTokens) || 0;
-  const outputTokens = Number(summary.outputTokens) || 0;
-  const totalTokens = inputTokens + outputTokens;
-  const successRate = completed ? (successes / completed) * 100 : null;
-  const completedRows = requests.filter(
-    (request) => Number(request.status) !== 499,
-  );
-  const averageLatency = completedRows.length
-    ? Math.round(
-        completedRows.reduce(
-          (sum, request) => sum + (Number(request.durationMs) || 0),
-          0,
-        ) / completedRows.length,
-      )
-    : null;
-  const lastRequest = completedRows[0] ?? null;
-
-  els.metricRequests.textContent = formatNumber(requestsCount);
-  els.metricRequestsHint.textContent = errors
-    ? `${formatNumber(errors)} ${errors === 1 ? "erro" : "erros"}`
-    : cancelled
-      ? `${formatNumber(cancelled)} canceladas`
-      : requestsCount
-        ? "sem erros"
-        : "nenhuma ainda";
-
-  els.metricSuccess.textContent =
-    successRate === null ? "—" : `${Math.round(successRate)}%`;
-  els.metricSuccessHint.textContent = completed
-    ? `${formatNumber(successes)}/${formatNumber(completed)} concluídas`
-    : "sem dados";
-
-  els.metricLatency.textContent =
-    averageLatency === null ? "—" : formatMs(averageLatency);
-  els.metricLatencyHint.textContent = lastRequest
-    ? `última ${formatMs(lastRequest.durationMs)}`
-    : "sem dados";
-
-  els.metricTokens.textContent = formatCompact(totalTokens);
-  els.metricTokensHint.textContent = `in ${formatCompact(
-    inputTokens,
-  )} · out ${formatCompact(outputTokens)}`;
-
-  const cachedTokens = Number(summary.cachedInputTokens) || 0;
-  const cacheRate =
-    inputTokens > 0 ? Math.min(100, (cachedTokens / inputTokens) * 100) : null;
-  els.metricCache.textContent =
-    cacheRate === null ? "—" : `${Math.round(cacheRate)}%`;
-  els.metricCacheHint.textContent = cachedTokens
-    ? `${formatCompact(cachedTokens)} lidos`
-    : inputTokens
-      ? "sem cache ainda"
-      : "sem dados";
-
-  const active =
-    state.accounts.find((account) => account.id === state.activeAccountId) ??
-    state.accounts[0];
-  const allowance = active?.allowance ?? null;
-  if (allowance && allowance.balance !== undefined && allowance.balance !== null) {
-    els.metricTheos.textContent = formatAmount(allowance.balance);
-    const parts = [];
-    if (allowance.granted !== undefined && allowance.granted !== null) {
-      parts.push(`concedido ${formatAmount(allowance.granted)}`);
-    }
-    if (Number(summary.estimatedTheos) > 0) {
-      parts.push(`~${formatAmount(summary.estimatedTheos)} estimados`);
-    }
-    els.metricTheosHint.textContent = parts.length
-      ? parts.join(" · ")
-      : "saldo atual";
-  } else if (allowance && allowance.enabled === false) {
-    els.metricTheos.textContent = "off";
-    els.metricTheosHint.textContent = "allowance desativada";
-  } else {
-    els.metricTheos.textContent = "—";
-    els.metricTheosHint.textContent = "sem leitura de saldo";
-  }
-
-  els.telemetryUpdated.textContent = state.telemetry.updatedAt
-    ? `Atualizado ${formatClock(state.telemetry.updatedAt)}`
-    : "—";
-
-  renderCharts(requests);
-
-  els.activityBody.replaceChildren();
-  const rows = requests.slice(0, 50);
-  els.activityWrap.classList.toggle("hidden", rows.length === 0);
-  els.activityEmpty.classList.toggle("hidden", rows.length > 0);
-
-  const byId = new Map(state.accounts.map((account) => [account.id, account]));
-  for (const request of rows) {
-    const row = document.createElement("tr");
-    if (request.error) row.title = request.error;
-
-    const time = document.createElement("td");
-    time.className = "activity-time";
-    time.textContent = formatClock(request.at);
-
-    const account = document.createElement("td");
-    account.className = "activity-account";
-    const owner = byId.get(request.accountId);
-    account.textContent = owner
-      ? owner.username
-        ? `@${owner.username}`
-        : owner.label || "Conta"
-      : "—";
-
-    const model = document.createElement("td");
-    model.className = "activity-model";
-    model.textContent = request.model || "—";
-
-    const route = document.createElement("td");
-    route.className = "activity-route";
-    route.textContent = request.endpoint || "—";
-
-    const statusCell = document.createElement("td");
-    const status = document.createElement("span");
-    const code = Number(request.status) || 0;
-    status.className = `status-code ${
-      code >= 200 && code < 400
-        ? "ok"
-        : code === 499
-          ? "warn"
-          : code >= 500
-            ? "bad"
-            : "warn"
-    }`;
-    status.textContent = code ? String(code) : "—";
-    if (request.error) {
-      status.title = code === 499 ? "Cliente cancelou a requisição." : request.error;
-    }
-    statusCell.append(status);
-
-    const latency = document.createElement("td");
-    latency.textContent = formatMs(request.durationMs);
-
-    const tokens = document.createElement("td");
-    const inTokens = Number(request.inputTokens) || 0;
-    const outTokens = Number(request.outputTokens) || 0;
-    tokens.textContent =
-      inTokens || outTokens
-        ? `${formatCompact(inTokens)} / ${formatCompact(outTokens)}`
-        : "—";
-
-    const cacheCell = document.createElement("td");
-    const cached = Number(request.cachedInputTokens) || 0;
-    cacheCell.textContent = cached
-      ? formatCompact(cached)
-      : request.cacheHit === false
-        ? "0"
-        : "—";
-    if (cached > 0) cacheCell.className = "cache-hit";
-
-    const theos = document.createElement("td");
-    theos.textContent =
-      request.theos === null || request.theos === undefined
-        ? "—"
-        : formatAmount(request.theos);
-
-    row.append(
-      time,
-      account,
-      model,
-      route,
-      statusCell,
-      latency,
-      tokens,
-      cacheCell,
-      theos,
-    );
-    els.activityBody.append(row);
-  }
-}
-
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-function svgNode(tag, attrs = {}, parent = null, text = null) {
-  const node = document.createElementNS(SVG_NS, tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    node.setAttribute(key, String(value));
-  }
-  if (text !== null) node.textContent = text;
-  if (parent) parent.append(node);
-  return node;
-}
-
-function chartEmpty(target, text) {
-  target.replaceChildren();
-  const empty = document.createElement("div");
-  empty.className = "chart-empty";
-  empty.textContent = text;
-  target.append(empty);
-}
-
-function renderCharts(requests) {
-  renderRequestsChart(requests);
-  renderLatencyChart(requests);
-  renderModelsChart(requests);
-}
-
-function renderRequestsChart(requests) {
-  const target = els.chartRequests;
-  if (!target) return;
-  const hourStart = new Date();
-  hourStart.setMinutes(0, 0, 0);
-  const buckets = Array.from({ length: 12 }, (_, index) => {
-    const date = new Date(hourStart.getTime() - (11 - index) * 3600000);
-    return {
-      at: date.getTime(),
-      label: `${String(date.getHours()).padStart(2, "0")}h`,
-      count: 0,
-    };
-  });
-  let total = 0;
-  for (const request of requests) {
-    const time = Date.parse(request.at);
-    if (!Number.isFinite(time)) continue;
-    const index = 11 + Math.floor((time - hourStart.getTime()) / 3600000);
-    if (index < 0 || index > 11) continue;
-    buckets[index].count += 1;
-    total += 1;
-  }
-  if (total === 0) {
-    chartEmpty(target, "Sem requisições nas últimas 12 horas.");
-    els.chartRequestsNote.textContent = "últimas 12h";
-    return;
-  }
-
-  const width = 600;
-  const height = 180;
-  const pad = { left: 30, right: 8, top: 12, bottom: 24 };
-  const innerW = width - pad.left - pad.right;
-  const innerH = height - pad.top - pad.bottom;
-  const max = Math.max(1, ...buckets.map((bucket) => bucket.count));
-  const svg = svgNode("svg", {
-    viewBox: `0 0 ${width} ${height}`,
-    role: "img",
-    "aria-label": "Requisições por hora nas últimas 12 horas",
-  });
-  const defs = svgNode("defs", {}, svg);
-  const gradient = svgNode(
-    "linearGradient",
-    { id: "barGrad", x1: "0", y1: "0", x2: "0", y2: "1" },
-    defs,
-  );
-  svgNode("stop", { offset: "0", "stop-color": "#e879f9" }, gradient);
-  svgNode("stop", { offset: "1", "stop-color": "#7c3aed" }, gradient);
-
-  for (let line = 0; line <= 3; line += 1) {
-    const y = pad.top + (innerH / 3) * line;
-    svgNode(
-      "line",
-      { x1: pad.left, y1: y, x2: width - pad.right, y2: y, class: "chart-grid-line" },
-      svg,
-    );
-    svgNode(
-      "text",
-      { x: pad.left - 6, y: y + 3, "text-anchor": "end", class: "chart-axis" },
-      svg,
-      String(Math.round(max - (max / 3) * line)),
-    );
-  }
-
-  const slot = innerW / buckets.length;
-  buckets.forEach((bucket, index) => {
-    const barW = Math.max(5, slot * 0.58);
-    const x = pad.left + slot * index + (slot - barW) / 2;
-    const barH = (bucket.count / max) * innerH;
-    const y = pad.top + innerH - barH;
-    const rect = svgNode(
-      "rect",
-      {
-        x,
-        y,
-        width: barW,
-        height: Math.max(2, barH),
-        rx: 3,
-        class: "chart-bar",
-      },
-      svg,
-    );
-    svgNode("title", {}, rect, `${bucket.label}: ${bucket.count}`);
-  });
-
-  for (const index of [0, 3, 6, 9, 11]) {
-    const x = pad.left + slot * index + slot / 2;
-    svgNode(
-      "text",
-      { x, y: height - 6, "text-anchor": "middle", class: "chart-axis" },
-      svg,
-      buckets[index].label,
-    );
-  }
-
-  target.replaceChildren(svg);
-  els.chartRequestsNote.textContent = `${formatNumber(total)} req · 12h`;
-}
-
-function renderLatencyChart(requests) {
-  const target = els.chartLatency;
-  if (!target) return;
-  const rows = requests
-    .filter((request) => Number(request.status) !== 499)
-    .slice(0, 30)
-    .reverse();
-  const values = rows
-    .map((request) => Number(request.durationMs))
-    .filter((value) => Number.isFinite(value) && value >= 0);
-  if (values.length === 0) {
-    chartEmpty(target, "Sem latência registrada ainda.");
-    els.chartLatencyNote.textContent = "últimas 30";
-    return;
-  }
-
-  const width = 600;
-  const height = 180;
-  const pad = { left: 38, right: 10, top: 12, bottom: 24 };
-  const innerW = width - pad.left - pad.right;
-  const innerH = height - pad.top - pad.bottom;
-  const max = Math.max(1, ...values);
-  const svg = svgNode("svg", {
-    viewBox: `0 0 ${width} ${height}`,
-    role: "img",
-    "aria-label": "Latência das últimas requisições",
-  });
-
-  for (let line = 0; line <= 3; line += 1) {
-    const y = pad.top + (innerH / 3) * line;
-    svgNode(
-      "line",
-      { x1: pad.left, y1: y, x2: width - pad.right, y2: y, class: "chart-grid-line" },
-      svg,
-    );
-    svgNode(
-      "text",
-      { x: pad.left - 6, y: y + 3, "text-anchor": "end", class: "chart-axis" },
-      svg,
-      formatMs(Math.round(max - (max / 3) * line)),
-    );
-  }
-
-  const step = values.length > 1 ? innerW / (values.length - 1) : 0;
-  const points = values.map((value, index) => {
-    const x = pad.left + step * index;
-    const y = pad.top + innerH - (value / max) * innerH;
-    return { x, y, value };
-  });
-  const path = points
-    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-    .join(" ");
-  svgNode("path", { d: path, class: "chart-line" }, svg);
-  for (const point of points) {
-    const circle = svgNode(
-      "circle",
-      { cx: point.x, cy: point.y, r: 2.6, class: "chart-point" },
-      svg,
-    );
-    svgNode("title", {}, circle, formatMs(point.value));
-  }
-
-  const labels = [rows[0], rows[rows.length - 1]];
-  labels.forEach((row, index) => {
-    if (!row) return;
-    svgNode(
-      "text",
-      {
-        x: index === 0 ? pad.left : width - pad.right,
-        y: height - 6,
-        "text-anchor": index === 0 ? "start" : "end",
-        class: "chart-axis",
-      },
-      svg,
-      formatClock(row.at),
-    );
-  });
-
-  target.replaceChildren(svg);
-  els.chartLatencyNote.textContent = `${formatNumber(values.length)} req`;
-}
-
-function renderModelsChart(requests) {
-  const target = els.chartModels;
-  if (!target) return;
-  const counts = new Map();
-  for (const request of requests) {
-    const model = request.model || "—";
-    counts.set(model, (counts.get(model) || 0) + 1);
-  }
-  const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
-  if (rows.length === 0) {
-    chartEmpty(target, "Sem modelos usados ainda.");
-    els.chartModelsNote.textContent = "—";
-    return;
-  }
-  const total = [...counts.values()].reduce((sum, value) => sum + value, 0);
-  const max = rows[0][1];
-  const list = document.createElement("div");
-  list.className = "model-bars";
-  for (const [model, count] of rows) {
-    const row = document.createElement("div");
-    row.className = "model-bar-row";
-    const label = document.createElement("span");
-    label.className = "model-bar-label";
-    label.textContent = model;
-    label.title = model;
-    const value = document.createElement("span");
-    value.className = "model-bar-value";
-    value.textContent = `${Math.round((count / total) * 100)}% · ${formatNumber(count)}`;
-    const track = document.createElement("div");
-    track.className = "model-bar-track";
-    const fill = document.createElement("div");
-    fill.className = "model-bar-fill";
-    fill.style.width = `${Math.max(3, (count / max) * 100)}%`;
-    track.append(fill);
-    row.append(label, value, track);
-    list.append(row);
-  }
-  target.replaceChildren(list);
-  els.chartModelsNote.textContent =
-    counts.size === 1 ? "1 modelo" : `${formatNumber(counts.size)} modelos`;
-}
-
-function formatNumber(value) {
-  return new Intl.NumberFormat("pt-BR").format(Number(value) || 0);
-}
-
-function formatCompact(value) {
-  const number = Number(value) || 0;
-  if (Math.abs(number) < 1000) return String(Math.round(number));
-  return new Intl.NumberFormat("pt-BR", {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(number);
-}
-
-function formatAmount(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return String(value ?? "—");
-  return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(number);
-}
-
-function formatMs(value) {
-  const number = Math.max(0, Number(value) || 0);
-  if (number < 1000) return `${Math.round(number)} ms`;
-  return `${(number / 1000).toFixed(1)} s`;
-}
-
-function formatClock(value) {
-  try {
-    return new Intl.DateTimeFormat("pt-BR", {
+  function fmtDate(val, { seconds = false } = {}) {
+    if (!val) return "—";
+    const d = val instanceof Date ? val : new Date(val);
+    if (Number.isNaN(d.getTime())) return String(val);
+    return d.toLocaleString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-      second: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return "—";
-  }
-}
-
-function buildClientSnippet(baseUrl) {
-  return `baseURL: "${baseUrl}/v1"
-apiKey:  "$DEEPAI_PROXY_TOKEN"
-model:   "deepai/glm-5.3-flash"`;
-}
-
-function normalizeModels(data) {
-  const rows = Array.isArray(data?.data) ? data.data : [];
-  return {
-    data: rows,
-    counts: data?.counts && typeof data.counts === "object" ? data.counts : {},
-    account: data?.account ?? null,
-    fetchedAt: typeof data?.fetchedAt === "string" ? data.fetchedAt : null,
-    default: typeof data?.default === "string" ? data.default : null,
-    loaded: true,
-    loading: false,
-  };
-}
-
-async function loadModels({ force = false, quiet = true } = {}) {
-  if (!state.sessionToken || state.models.loading) return;
-  state.models.loading = true;
-  if (els.refreshModels) {
-    els.refreshModels.disabled = true;
-    els.refreshModels.textContent = force ? "Atualizando…" : "Carregando…";
-  }
-  try {
-    const data = await adminFetch(
-      `/admin/api/models${force ? "?refresh=1" : ""}`,
-    );
-    state.models = { ...state.models, ...normalizeModels(data) };
-    renderModels();
-    if (force) toast("success", "Catálogo atualizado na DeepAI.");
-  } catch (error) {
-    if (!quiet) toast("error", error.message);
-    if (els.modelsSummary && !state.models.loaded) {
-      els.modelsSummary.textContent = error.message;
-    }
-  } finally {
-    state.models.loading = false;
-    if (els.refreshModels) {
-      els.refreshModels.disabled = false;
-      els.refreshModels.textContent = "Atualizar catálogo";
-    }
-  }
-}
-
-function syncModelProviders(data) {
-  if (!els.modelProvider) return;
-  const providers = new Map();
-  for (const model of data) {
-    if (!model.family || !model.provider) continue;
-    if (!providers.has(model.family)) {
-      providers.set(model.family, {
-        label: model.provider,
-        color: model.color,
-      });
-    }
-  }
-  const entries = [...providers.entries()].sort((a, b) =>
-    a[1].label.localeCompare(b[1].label, "pt-BR"),
-  );
-  const signature = entries
-    .map(([family, meta]) => `${family}:${meta.label}`)
-    .join("|");
-  if (state.models.providerSignature !== signature) {
-    const current = state.models.provider;
-    els.modelProvider.replaceChildren();
-    const all = document.createElement("option");
-    all.value = "all";
-    all.textContent = "Todos os fabricantes";
-    els.modelProvider.append(all);
-    for (const [family, meta] of entries) {
-      const option = document.createElement("option");
-      option.value = family;
-      option.textContent = meta.label;
-      els.modelProvider.append(option);
-    }
-    state.models.providerSignature = signature;
-    state.models.provider = providers.has(current) ? current : "all";
-  }
-  els.modelProvider.value = state.models.provider;
-}
-
-function modelUsage(slug) {
-  const requests = state.telemetry.requests ?? [];
-  let count = 0;
-  let tokens = 0;
-  let inputTokens = 0;
-  let cached = 0;
-  for (const request of requests) {
-    if (request.model !== slug) continue;
-    count += 1;
-    const input = Number(request.inputTokens) || 0;
-    inputTokens += input;
-    tokens += input + (Number(request.outputTokens) || 0);
-    cached += Number(request.cachedInputTokens) || 0;
-  }
-  return {
-    count,
-    tokens,
-    cached,
-    cacheRate: inputTokens ? (cached / inputTokens) * 100 : 0,
-  };
-}
-
-function renderModels() {
-  const data = state.models.data;
-  const counts = state.models.counts ?? {};
-  const filter = state.models.filter;
-  const provider = state.models.provider;
-  const sort = state.models.sort;
-  const search = state.models.search.trim().toLowerCase();
-  syncModelProviders(data);
-
-  if (els.countAll) els.countAll.textContent = String(counts.total ?? data.length);
-  if (els.countFree) els.countFree.textContent = String(counts.free ?? 0);
-  if (els.countPaid) els.countPaid.textContent = String(counts.paid ?? 0);
-  if (els.countPremier) els.countPremier.textContent = String(counts.premier ?? 0);
-
-  for (const chip of els.modelFilters) {
-    chip.classList.toggle("active", chip.dataset.filter === filter);
-  }
-
-  if (els.modelsUpdated) {
-    els.modelsUpdated.textContent = state.models.fetchedAt
-      ? `Atualizado ${formatClock(state.models.fetchedAt)}`
-      : "—";
-  }
-
-  if (!state.models.loaded) {
-    if (els.modelsSummary) {
-      els.modelsSummary.textContent = "Conecte uma conta para carregar o catálogo.";
-    }
-    els.modelsGrid.replaceChildren();
-    els.modelsEmpty.classList.add("hidden");
-    return;
-  }
-
-  const account = state.models.account;
-  const providerCount = new Set(
-    data.map((model) => model.family).filter(Boolean),
-  ).size;
-  const bits = [
-    `${formatNumber(data.length)} modelos`,
-    `${formatNumber(counts.free ?? 0)} grátis`,
-    `${formatNumber(counts.paid ?? 0)} pagos`,
-  ];
-  if (providerCount) {
-    bits.push(
-      `${formatNumber(providerCount)} ${
-        providerCount === 1 ? "fabricante" : "fabricantes"
-      }`,
-    );
-  }
-  if (account?.username) {
-    bits.push(`conta @${account.username}${account.isPro ? " (PRO)" : ""}`);
-  }
-  if (els.modelsSummary) els.modelsSummary.textContent = bits.join(" · ");
-
-  const filtered = data.filter((model) => {
-    if (filter === "free" && !model.free) return false;
-    if (filter === "paid" && !model.paid) return false;
-    if (filter === "premier" && !model.premier) return false;
-    if (provider !== "all" && model.family !== provider) return false;
-    if (!search) return true;
-    return (
-      String(model.name ?? "").toLowerCase().includes(search) ||
-      String(model.slug ?? "").toLowerCase().includes(search) ||
-      String(model.id ?? "").toLowerCase().includes(search) ||
-      String(model.provider ?? "").toLowerCase().includes(search)
-    );
-  });
-
-  const priceOf = (model) => {
-    const value = Number(model.pricing?.theos_per_request);
-    return Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
-  };
-  if (sort === "name") {
-    filtered.sort((a, b) =>
-      String(a.name ?? a.slug ?? "").localeCompare(
-        String(b.name ?? b.slug ?? ""),
-        "pt-BR",
-      ),
-    );
-  } else if (sort === "price-asc") {
-    filtered.sort((a, b) => priceOf(a) - priceOf(b));
-  } else if (sort === "price-desc") {
-    filtered.sort((a, b) => {
-      const left = Number.isFinite(priceOf(a)) ? priceOf(a) : -1;
-      const right = Number.isFinite(priceOf(b)) ? priceOf(b) : -1;
-      return right - left;
+      ...(seconds ? { second: "2-digit" } : {}),
     });
-  } else if (sort === "context-desc") {
-    filtered.sort(
-      (a, b) =>
-        (Number(b.context_window) || 0) - (Number(a.context_window) || 0),
-    );
   }
 
-  els.modelsGrid.replaceChildren();
-  for (const model of filtered) {
-    els.modelsGrid.append(buildModelCard(model));
-  }
-  els.modelsEmpty.classList.toggle("hidden", filtered.length > 0);
-}
-
-function buildModelCard(model) {
-  const card = document.createElement("article");
-  card.className = "model-card";
-
-  const top = document.createElement("div");
-  top.className = "model-top";
-  const identity = document.createElement("div");
-  identity.className = "model-identity";
-  const logo = document.createElement("span");
-  logo.className = "model-logo";
-  logo.style.setProperty("--model-color", model.color || "#7c3aed");
-  const logoImage = document.createElement("img");
-  logoImage.src = model.logo || "/logos/generic.svg";
-  logoImage.alt = "";
-  logoImage.loading = "lazy";
-  logoImage.decoding = "async";
-  logoImage.addEventListener(
-    "error",
-    () => {
-      logoImage.src = "/logos/generic.svg";
-    },
-    { once: true },
-  );
-  logo.append(logoImage);
-
-  const info = document.createElement("div");
-  info.className = "model-copy";
-  const name = document.createElement("h3");
-  name.className = "model-name";
-  name.textContent = model.name || model.slug || "Modelo";
-  const slug = document.createElement("div");
-  slug.className = "model-slug";
-  slug.textContent = model.provider
-    ? `${model.provider} · ${model.slug || model.id || ""}`
-    : model.slug || model.id || "";
-  slug.title = model.id || "";
-  const badges = document.createElement("div");
-  badges.className = "model-badges";
-
-  const tier = document.createElement("span");
-  tier.className = `model-tag ${model.free ? "free" : "paid"}`;
-  tier.textContent = model.free ? "Grátis" : "Pago";
-  badges.append(tier);
-
-  if (model.slug && model.slug === state.models.default) {
-    const standard = document.createElement("span");
-    standard.className = "model-tag default";
-    standard.textContent = "Padrão";
-    badges.append(standard);
-  }
-  if (model.premier) {
-    const premier = document.createElement("span");
-    premier.className = "model-tag premier";
-    premier.textContent = "Premier";
-    badges.append(premier);
-  }
-  if (model.requires_pro) {
-    const pro = document.createElement("span");
-    pro.className = "model-tag pro";
-    pro.textContent =
-      state.models.account?.isPro === false ? "Requer PRO" : "PRO";
-    badges.append(pro);
-  }
-  if (Array.isArray(model.input) && model.input.includes("image")) {
-    const vision = document.createElement("span");
-    vision.className = "model-tag";
-    vision.textContent = "Visão*";
-    vision.title =
-      "Capacidade do catálogo. Envio de imagens pelo proxy ainda é experimental.";
-    badges.append(vision);
-  }
-  if (model.api === "openai-responses") {
-    const responses = document.createElement("span");
-    responses.className = "model-tag";
-    responses.textContent = "Responses";
-    badges.append(responses);
+  function timeAgo(ts) {
+    if (!ts) return "nunca";
+    const diff = Date.now() - Number(ts);
+    if (!Number.isFinite(diff) || diff < 0) return "agora";
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return `${s}s atrás`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}min atrás`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h atrás`;
+    const d = Math.floor(h / 24);
+    return `${d}d atrás`;
   }
 
-  info.append(name, slug, badges);
-
-  const price = document.createElement("div");
-  price.className = "model-price";
-  const priceValue = Number(model.pricing?.theos_per_request);
-  if (model.free) {
-    price.textContent = "Grátis";
-  } else if (Number.isFinite(priceValue)) {
-    price.textContent = `${formatAmount(priceValue)} `;
-    const unit = document.createElement("small");
-    unit.textContent = "Theos/req";
-    price.append(unit);
-  } else {
-    price.textContent = "—";
-  }
-  identity.append(logo, info);
-  top.append(identity, price);
-
-  const stats = document.createElement("div");
-  stats.className = "model-stats";
-  stats.append(
-    modelStat("Contexto", formatCompact(model.context_window ?? 0)),
-    modelStat("Saída", formatCompact(model.max_output_tokens ?? 0)),
-    modelStat(
-      "Entrada",
-      Array.isArray(model.input)
-        ? model.input.map((value) => (value === "text" ? "texto" : "img")).join("/")
-        : "—",
-    ),
-  );
-
-  const usage = document.createElement("div");
-  usage.className = "model-usage";
-  const usageData = modelUsage(model.slug);
-  const dot = document.createElement("span");
-  dot.className = "usage-dot";
-  usage.append(dot);
-  if (usageData.count) {
-    const text = document.createElement("span");
-    text.textContent = `${formatNumber(usageData.count)} req · ${formatCompact(
-      usageData.tokens,
-    )} tokens`;
-    usage.append(text);
-    if (usageData.cached > 0) {
-      const cache = document.createElement("span");
-      cache.className = "usage-cache";
-      cache.textContent = `· ${formatNumber(usageData.cacheRate)}% cache`;
-      usage.append(cache);
-    }
-  } else {
-    const text = document.createElement("span");
-    text.textContent = "Sem uso ainda";
-    usage.append(text);
+  function duration(sec) {
+    const s = Math.max(0, Math.floor(Number(sec) || 0));
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m`;
+    return `${s}s`;
   }
 
-  const actions = document.createElement("div");
-  actions.className = "model-actions";
-  const copy = document.createElement("button");
-  copy.className = "btn btn-ghost btn-sm";
-  copy.type = "button";
-  copy.textContent = "Copiar id";
-  copy.title = `Copiar ${model.id}`;
-  copy.addEventListener("click", async () => {
-    const ok = await copyText(model.id);
-    if (ok) {
-      markCopied(copy);
-      toast("success", "Id do modelo copiado.");
-    } else {
-      toast("error", "Não foi possível copiar.");
-    }
-  });
-  actions.append(copy);
-
-  card.append(top, stats, usage, actions);
-  return card;
-}
-
-function modelStat(label, value) {
-  const item = document.createElement("div");
-  item.className = "model-stat";
-  const name = document.createElement("span");
-  name.textContent = label;
-  const number = document.createElement("strong");
-  number.textContent = value;
-  item.append(name, number);
-  return item;
-}
-
-function renderAccounts() {
-  els.accountsGrid.replaceChildren();
-  els.accountCount.textContent = String(state.accounts.length);
-  const hasAccounts = state.accounts.length > 0;
-  els.emptyState.classList.toggle("hidden", hasAccounts);
-  els.accountsGrid.classList.toggle("hidden", !hasAccounts);
-
-  for (const account of state.accounts) {
-    els.accountsGrid.append(buildAccountCard(account));
-  }
-}
-
-function buildAccountCard(account) {
-  const card = document.createElement("article");
-  card.className = `account${account.active ? " active" : ""}`;
-
-  const top = document.createElement("div");
-  top.className = "account-top";
-
-  const avatar = document.createElement("div");
-  avatar.className = "avatar";
-  const name = account.username || account.label || "DeepAI";
-  avatar.textContent = (name.replace(/^@/, "")[0] || "D").toUpperCase();
-
-  const identity = document.createElement("div");
-  identity.className = "account-id";
-  const title = document.createElement("h3");
-  title.textContent = account.username ? `@${account.username}` : account.label || "Conta DeepAI";
-  const sub = document.createElement("span");
-  sub.textContent = account.keyLast4 ? `Api-Key •••• ${account.keyLast4}` : "Api-Key protegida";
-  identity.append(title, sub);
-
-  const badges = document.createElement("div");
-  badges.style.display = "flex";
-  badges.style.flexDirection = "column";
-  badges.style.gap = "5px";
-  badges.style.alignItems = "flex-end";
-  if (account.isPro) {
-    const pro = document.createElement("span");
-    pro.className = "badge-pro";
-    pro.textContent = "PRO";
-    badges.append(pro);
-  }
-  if (account.active) {
-    const active = document.createElement("span");
-    active.className = "badge-active";
-    active.innerHTML = "<i></i> Ativa";
-    badges.append(active);
+  function latencyClass(ms) {
+    const v = Number(ms) || 0;
+    if (v >= 30000) return "is-very-slow";
+    if (v >= 12000) return "is-slow";
+    return "";
   }
 
-  top.append(avatar, identity, badges);
-
-  const meta = document.createElement("dl");
-  meta.className = "account-meta";
-  const entitlement = account.entitlement ?? null;
-  const plan = String(entitlement?.plan || (account.isPro ? "pro" : "free"));
-  const credits =
-    entitlement?.creditsRemaining !== undefined &&
-    entitlement?.creditsRemaining !== null
-      ? formatAmount(entitlement.creditsRemaining)
-      : "—";
-  meta.append(
-    metaPair("Conectada", formatDate(account.createdAt)),
-    metaPair("Check-in", account.lastCheckInAt ? formatDate(account.lastCheckInAt) : "pendente"),
-    metaPair("Plano", plan.toUpperCase()),
-    metaPair("Créditos", credits),
-  );
-  if (entitlement?.checkedAt) {
-    meta.title = `Plano lido às ${formatClock(entitlement.checkedAt)}${
-      entitlement.hasOverages ? " · com overage" : ""
-    }`;
+  function initials(label) {
+    const clean = String(label || "?").trim();
+    const parts = clean.split(/[\s._-]+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return clean.slice(0, 2).toUpperCase();
   }
 
-  const stats = state.telemetry.accounts?.[account.id] ?? null;
-  const allowance = account.allowance ?? null;
-  const usage = document.createElement("div");
-  usage.className = "account-usage";
-  const tokens =
-    (Number(stats?.inputTokens) || 0) + (Number(stats?.outputTokens) || 0);
-  usage.append(
-    usageItem(
-      "Req.",
-      formatNumber(stats?.requests || 0),
-      Number(stats?.errors) > 0 ? "warn" : "",
-    ),
-    usageItem("Tokens", formatCompact(tokens)),
-    usageItem(
-      "Latência",
-      stats?.lastLatencyMs !== null && stats?.lastLatencyMs !== undefined
-        ? formatMs(stats.lastLatencyMs)
-        : "—",
-    ),
-    usageItem(
-      "Theos",
-      allowance?.balance !== undefined && allowance?.balance !== null
-        ? formatAmount(allowance.balance)
-        : "—",
-      allowance?.balance !== undefined ? "good" : "",
-    ),
-  );
-  if (allowance) {
-    const bits = [];
-    if (allowance.granted !== undefined && allowance.granted !== null) {
-      bits.push(`concedido ${formatAmount(allowance.granted)}`);
-    }
-    if (allowance.checkedAt) {
-      bits.push(`lido às ${formatClock(allowance.checkedAt)}`);
-    }
-    usage.title = bits.join(" · ");
-  }
+  /* ------------------------------------------------------------------ */
+  /* Toasts                                                              */
+  /* ------------------------------------------------------------------ */
 
-  const actions = document.createElement("div");
-  actions.className = "account-actions";
-
-  const activate = document.createElement("button");
-  activate.className = account.active ? "btn btn-ghost" : "btn btn-secondary";
-  activate.type = "button";
-  activate.textContent = account.active ? "Em uso" : "Usar esta";
-  activate.disabled = Boolean(account.active);
-  activate.addEventListener("click", () => activateAccount(account));
-
-  const refresh = document.createElement("button");
-  refresh.className = "btn btn-ghost";
-  refresh.type = "button";
-  refresh.textContent = "Uso";
-  refresh.title = "Atualizar saldo e check-in";
-  refresh.addEventListener("click", () => refreshAccountUsage(account, refresh));
-
-  const remove = document.createElement("button");
-  remove.className = "btn btn-danger-ghost";
-  remove.type = "button";
-  remove.textContent = "Remover";
-  remove.addEventListener("click", () => removeAccount(account));
-
-  actions.append(activate, refresh, remove);
-  card.append(top, meta, usage, actions);
-  return card;
-}
-
-function usageItem(label, value, className = "") {
-  const item = document.createElement("div");
-  item.className = "usage-item";
-  const name = document.createElement("span");
-  name.textContent = label;
-  const number = document.createElement("strong");
-  number.textContent = value;
-  if (className) number.className = className;
-  item.append(name, number);
-  return item;
-}
-
-async function refreshAccountUsage(account, button) {
-  const previous = button.textContent;
-  button.disabled = true;
-  button.textContent = "…";
-  try {
-    await adminFetch(`/admin/api/accounts/${account.id}/usage`, {
-      method: "POST",
-      body: "{}",
-    });
-    await refreshState();
-    toast("success", "Saldo e check-in atualizados.");
-  } catch (error) {
-    toast("error", error.message);
-  } finally {
-    if (button.isConnected) {
-      button.disabled = false;
-      button.textContent = previous;
-    }
-  }
-}
-
-function metaPair(label, value) {
-  const dt = document.createElement("dt");
-  dt.textContent = label;
-  const dd = document.createElement("dd");
-  dd.textContent = value;
-  const fragment = document.createDocumentFragment();
-  fragment.append(dt, dd);
-  return fragment;
-}
-
-async function activateAccount(account) {
-  try {
-    await adminFetch(`/admin/api/accounts/${account.id}/activate`, {
-      method: "POST",
-      body: "{}",
-    });
-    await refreshState();
-    toast("success", "Conta ativa atualizada.");
-  } catch (error) {
-    toast("error", error.message);
-  }
-}
-
-async function removeAccount(account) {
-  const label = account.username ? `@${account.username}` : "esta conta";
-  const confirmed = await confirmAction({
-    title: "Remover conta",
-    message: `A credencial de ${label} será apagada do proxy. Essa ação não pode ser desfeita.`,
-    confirmLabel: "Remover",
-  });
-  if (!confirmed) return;
-  try {
-    await adminFetch(`/admin/api/accounts/${account.id}`, { method: "DELETE" });
-    await refreshState();
-    toast("success", "Conta removida.");
-  } catch (error) {
-    toast("error", error.message);
-  }
-}
-
-async function importKey() {
-  const apiKey = els.apiKeyInput.value.trim();
-  if (!apiKey) {
-    toast("error", "Cole uma API key para adicionar.");
-    return;
-  }
-  els.importBtn.disabled = true;
-  els.importBtn.textContent = "Validando…";
-  try {
-    const result = await adminFetch("/admin/api/accounts/import", {
-      method: "POST",
-      body: JSON.stringify({ apiKey }),
-    });
-    els.apiKeyInput.value = "";
-    await refreshState();
-    toast(
-      "success",
-      result.created
-        ? "API key validada e conta adicionada."
-        : "Essa conta já existia — credencial atualizada.",
-    );
-  } catch (error) {
-    toast("error", error.message);
-  } finally {
-    els.importBtn.disabled = false;
-    els.importBtn.textContent = "Adicionar";
-  }
-}
-
-/* ---------- token / snippet ---------- */
-
-async function rotateToken() {
-  const confirmed = await confirmAction({
-    title: "Rotacionar token do proxy",
-    message:
-      "O token atual deixa de funcionar imediatamente. Atualize seus clientes com o novo token.",
-    confirmLabel: "Rotacionar",
-  });
-  if (!confirmed) return;
-  try {
-    const data = await adminFetch("/admin/api/proxy-token/rotate", {
-      method: "POST",
-      body: "{}",
-    });
-    state.proxyToken = data.proxyToken;
-    els.proxyToken.value = data.proxyToken;
-    toast("success", "Token do proxy rotacionado.");
-  } catch (error) {
-    toast("error", error.message);
-  }
-}
-
-function buildSnippet(baseUrl) {
-  return `curl ${baseUrl}/v1/chat/completions \\
-  -H "Authorization: Bearer $DEEPAI_PROXY_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "deepai/glm-5.3-flash",
-    "messages": [{ "role": "user", "content": "Olá!" }]
-  }'`;
-}
-
-/* ---------- utilidades ---------- */
-
-function formatDate(value) {
-  try {
-    return new Intl.DateTimeFormat("pt-BR", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    }).format(new Date(value));
-  } catch {
-    return "—";
-  }
-}
-
-function formatDuration(ms) {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function clearLoginTimers() {
-  clearInterval(state.pollTimer);
-  clearInterval(state.countdownTimer);
-  state.pollTimer = null;
-  state.countdownTimer = null;
-}
-
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.append(area);
-    area.select();
-    try {
-      return document.execCommand("copy");
-    } catch {
-      return false;
-    } finally {
-      area.remove();
-    }
-  }
-}
-
-async function copyFromInput(input, button) {
-  if (!input.value) return;
-  const ok = await copyText(input.value);
-  if (!ok) {
-    toast("error", "Não foi possível copiar.");
-    return;
-  }
-  markCopied(button);
-  toast("success", "Copiado para a área de transferência.");
-}
-
-function markCopied(button) {
-  if (!button) return;
-  const label = button.querySelector("span");
-  button.classList.add("copied");
-  if (label) {
-    const previous = label.textContent;
-    label.textContent = "Copiado";
-    setTimeout(() => {
-      label.textContent = previous;
-      button.classList.remove("copied");
-    }, 1600);
-  } else {
-    setTimeout(() => button.classList.remove("copied"), 1600);
-  }
-}
-
-function toast(type, message) {
-  const node = document.createElement("div");
-  node.className = `toast ${type}`;
-  const icon = document.createElement("span");
-  icon.className = "toast-icon";
-  icon.textContent = type === "error" ? "!" : "✓";
-  const text = document.createElement("div");
-  text.textContent = message;
-  node.append(icon, text);
-  els.toasts.append(node);
-
-  const remove = () => {
-    node.classList.add("leaving");
-    setTimeout(() => node.remove(), 260);
-  };
-  const timer = setTimeout(remove, type === "error" ? 6500 : 4200);
-  node.addEventListener("click", () => {
-    clearTimeout(timer);
-    remove();
-  });
-}
-
-function confirmAction({ title, message, confirmLabel = "Confirmar" }) {
-  return new Promise((resolve) => {
-    els.confirmTitle.textContent = title;
-    els.confirmMessage.textContent = message;
-    els.confirmOk.textContent = confirmLabel;
-
-    const finish = (value) => {
-      els.confirmOk.removeEventListener("click", ok);
-      els.confirmCancel.removeEventListener("click", cancel);
-      els.confirmDialog.removeEventListener("close", closed);
-      if (els.confirmDialog.open) els.confirmDialog.close();
-      resolve(value);
+  function toast(message, kind = "ok", timeout = 3600) {
+    const container = $("toastContainer");
+    const el = document.createElement("div");
+    el.className = `toast ${kind}`;
+    el.setAttribute("role", kind === "err" ? "alert" : "status");
+    el.innerHTML = `${icon(ICONS[kind] || ICONS.info)}<span>${esc(message)}</span>`;
+    container.appendChild(el);
+    const close = () => {
+      el.classList.add("is-out");
+      setTimeout(() => el.remove(), 220);
     };
-    const ok = () => finish(true);
-    const cancel = () => finish(false);
-    const closed = () => finish(false);
-
-    els.confirmOk.addEventListener("click", ok);
-    els.confirmCancel.addEventListener("click", cancel);
-    els.confirmDialog.addEventListener("close", closed);
-    els.confirmDialog.showModal();
-  });
-}
-
-/* ---------- eventos ---------- */
-
-function bindEvents() {
-  els.updateLaterBtn?.addEventListener("click", dismissUpdateDialog);
-  els.updateNowBtn?.addEventListener("click", applyUpdate);
-  els.updateDialog?.addEventListener("cancel", (e) => {
-    // allow closing with Esc as "later"
-    if (pendingUpdateVersion) localStorage.setItem(UPDATE_DISMISS_KEY, pendingUpdateVersion);
-  });
-  els.gateForm.addEventListener("submit", submitGate);
-  els.gateReset.addEventListener("click", resetPasswordFromGate);
-  els.lockBtn.addEventListener("click", lock);
-  els.startBtn.addEventListener("click", startLogin);
-
-  for (const button of els.tabs) {
-    button.addEventListener("click", () => applyTab(button.dataset.tab));
-  }
-  window.addEventListener("hashchange", () => {
-    if (state.sessionToken) applyTab(location.hash.replace(/^#/, ""));
-  });
-
-  els.generatePassword.addEventListener("click", useGeneratedPassword);
-  els.copyGenerated.addEventListener("click", copyGeneratedPassword);
-
-  $$(".password-toggle").forEach((button) => {
-    button.addEventListener("click", () => {
-      const input = document.getElementById(button.dataset.target);
-      if (!input) return;
-      input.type = input.type === "password" ? "text" : "password";
-      syncPasswordToggles();
-    });
-  });
-
-  els.setupPassword.addEventListener("input", () => {
-    renderStrength(els.setupPassword.value);
-    els.gateError.textContent = "";
-  });
-  els.setupConfirm.addEventListener("input", () => {
-    els.gateError.textContent = "";
-  });
-  els.loginPassword.addEventListener("input", () => {
-    els.gateError.textContent = "";
-  });
-
-  els.restartBtn.addEventListener("click", async () => {
-    if (state.login && state.login.settled) {
-      resetLoginUi();
-    } else {
-      await cancelLogin();
-    }
-  });
-
-  els.copyLinkBtn.addEventListener("click", () =>
-    copyFromInput(els.loginUrl, els.copyLinkBtn),
-  );
-
-  els.completeBtn.addEventListener("click", completeManually);
-  els.callbackInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      completeManually();
-    }
-  });
-
-  els.importBtn.addEventListener("click", importKey);
-  els.apiKeyInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      importKey();
-    }
-  });
-
-  $$(".copy-btn[data-copy-target]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const input = document.getElementById(button.dataset.copyTarget);
-      copyFromInput(input, button);
-    });
-  });
-
-  els.copySnippet.addEventListener("click", async () => {
-    const ok = await copyText(els.snippet.textContent);
-    if (ok) {
-      markCopied(els.copySnippet);
-      toast("success", "Exemplo copiado.");
-    } else {
-      toast("error", "Não foi possível copiar.");
-    }
-  });
-
-  els.revealBtn.addEventListener("click", () => {
-    const showing = els.proxyToken.type === "text";
-    els.proxyToken.type = showing ? "password" : "text";
-    els.revealBtn.title = showing ? "Mostrar token" : "Ocultar token";
-    els.revealBtn.setAttribute(
-      "aria-label",
-      showing ? "Mostrar token" : "Ocultar token",
-    );
-  });
-
-  els.rotateBtn.addEventListener("click", rotateToken);
-
-  if (els.refreshModels) {
-    els.refreshModels.addEventListener("click", () =>
-      loadModels({ force: true, quiet: false }),
-    );
-  }
-  for (const chip of els.modelFilters) {
-    chip.addEventListener("click", () => {
-      state.models.filter = chip.dataset.filter || "all";
-      renderModels();
-    });
-  }
-  if (els.modelSearch) {
-    els.modelSearch.addEventListener("input", () => {
-      state.models.search = els.modelSearch.value;
-      renderModels();
-    });
-  }
-  if (els.modelProvider) {
-    els.modelProvider.addEventListener("change", () => {
-      state.models.provider = els.modelProvider.value || "all";
-      renderModels();
-    });
-  }
-  if (els.modelSort) {
-    els.modelSort.addEventListener("change", () => {
-      state.models.sort = els.modelSort.value || "default";
-      renderModels();
-    });
-  }
-  if (els.copyClientSnippet) {
-    els.copyClientSnippet.addEventListener("click", async () => {
-      const ok = await copyText(els.clientSnippet.textContent);
-      if (ok) {
-        markCopied(els.copyClientSnippet);
-        toast("success", "Configuração copiada.");
-      } else {
-        toast("error", "Não foi possível copiar.");
-      }
+    const t = setTimeout(close, timeout);
+    el.addEventListener("click", () => {
+      clearTimeout(t);
+      close();
     });
   }
 
-  els.refreshTelemetry.addEventListener("click", async () => {
-    const previous = els.refreshTelemetry.textContent;
-    els.refreshTelemetry.disabled = true;
-    els.refreshTelemetry.textContent = "Atualizando…";
+  async function copyText(text, label = "Copiado!") {
+    const value = String(text ?? "").trim();
+    if (!value) return toast("Nada para copiar.", "err");
     try {
-      await refreshTelemetry({ quiet: false });
-      toast("success", "Telemetria atualizada.");
-    } finally {
-      els.refreshTelemetry.disabled = false;
-      els.refreshTelemetry.textContent = previous;
-    }
-  });
-
-  els.clearTelemetry.addEventListener("click", async () => {
-    const confirmed = await confirmAction({
-      title: "Limpar telemetria",
-      message:
-        "O histórico de requisições e os totais locais serão apagados. Contas e credenciais não são afetadas.",
-      confirmLabel: "Limpar",
-    });
-    if (!confirmed) return;
-    try {
-      await adminFetch("/admin/api/telemetry/clear", {
-        method: "POST",
-        body: "{}",
-      });
-      await refreshTelemetry({ quiet: false });
-      toast("success", "Histórico de telemetria limpo.");
-    } catch (error) {
-      toast("error", error.message);
-    }
-  });
-
-  if (els.clearConversations) {
-    els.clearConversations.addEventListener("click", async () => {
-      const confirmed = await confirmAction({
-        title: "Limpar conversas",
-        message:
-          "As sessões e o histórico criptografado usados para continuidade e cache serão apagados. Contas, token e telemetria não são afetados.",
-        confirmLabel: "Limpar conversas",
-      });
-      if (!confirmed) return;
+      await navigator.clipboard.writeText(value);
+      toast(label, "ok", 2200);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+      document.body.appendChild(ta);
+      ta.select();
       try {
-        const next = await adminFetch("/admin/api/conversations/clear", {
-          method: "POST",
-          body: "{}",
-        });
-        state.conversations = normalizeConversations(next);
-        renderConversations();
-        toast("success", "Conversas apagadas.");
-      } catch (error) {
-        toast("error", error.message);
+        document.execCommand("copy");
+        toast(label, "ok", 2200);
+      } catch {
+        toast("Não foi possível copiar.", "err");
+      } finally {
+        ta.remove();
       }
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Modal (substitui confirm/prompt)                                    */
+  /* ------------------------------------------------------------------ */
+
+  function openModal({ title = "Confirmar", desc = "", confirm = "Confirmar", cancel = "Cancelar", danger = false, input = null }) {
+    return new Promise((resolve) => {
+      const modal = $("modal");
+      $("modalTitle").textContent = title;
+      $("modalDesc").textContent = desc;
+      const field = $("modalField");
+      const inputEl = $("modalInput");
+      const confirmBtn = $("modalConfirm");
+
+      confirmBtn.textContent = confirm;
+      confirmBtn.className = `btn ${danger ? "btn-danger" : "btn-primary"}`;
+      $("modalCancel").textContent = cancel;
+
+      if (input) {
+        field.hidden = false;
+        inputEl.value = input.value || "";
+        inputEl.placeholder = input.placeholder || "";
+        inputEl.type = input.type || "text";
+        if (input.maxlength) inputEl.maxLength = input.maxlength;
+      } else {
+        field.hidden = true;
+      }
+
+      modal.hidden = false;
+      state.modalResolve = resolve;
+
+      const done = (value) => {
+        modal.hidden = true;
+        state.modalResolve = null;
+        document.removeEventListener("keydown", onKey);
+        resolve(value);
+      };
+
+      const finish = () => {
+        if (!input) return done(true);
+        const v = inputEl.value.trim();
+        if (!v) {
+          inputEl.focus();
+          inputEl.style.borderColor = "var(--err)";
+          return;
+        }
+        done(v);
+      };
+
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          done(false);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          finish();
+        }
+      };
+
+      confirmBtn.onclick = finish;
+      $("modalCancel").onclick = () => done(false);
+      $("modalClose").onclick = () => done(false);
+      modal.onclick = (e) => {
+        if (e.target === modal) done(false);
+      };
+      document.addEventListener("keydown", onKey);
+
+      setTimeout(() => (input ? inputEl : confirmBtn).focus(), 40);
     });
   }
+
+  const confirmAction = (opts) => openModal(opts);
+
+  /* ------------------------------------------------------------------ */
+  /* Tema                                                                */
+  /* ------------------------------------------------------------------ */
+
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("dp-theme", theme);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function initTheme() {
+    let theme = null;
+    try {
+      theme = localStorage.getItem("dp-theme");
+    } catch {
+      /* ignore */
+    }
+    if (!theme) {
+      theme = window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    applyTheme(theme);
+  }
+
+  function initRange() {
+    let range = null;
+    try {
+      range = localStorage.getItem("dp-range");
+    } catch {
+      /* ignore */
+    }
+    if (range && RANGE_LABELS[range]) {
+      state.range = range;
+      qsa("#metricsRangePills button").forEach((b) => {
+        b.setAttribute("aria-pressed", String(b.dataset.range === range));
+      });
+      $("chartRangeLabel").textContent = RANGE_LABELS[range];
+    }
+  }
+
+  $("btnThemeToggle").addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(next);
+    if (state.tab === "dashboard") renderDashboard();
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Navegação                                                           */
+  /* ------------------------------------------------------------------ */
+
+  const TAB_LOADERS = {
+    dashboard: () => loadMetrics(),
+    accounts: () => Promise.allSettled([loadAccounts(), refreshAuthStatus()]),
+    models: () => loadModels(),
+    settings: () => loadConfig(),
+  };
+
+  function switchTab(tabName, { push = true } = {}) {
+    if (!TAB_INFO[tabName]) tabName = "dashboard";
+    state.tab = tabName;
+
+    qsa(".nav-item").forEach((btn) => {
+      const on = btn.dataset.tab === tabName;
+      btn.classList.toggle("is-active", on);
+      if (on) btn.setAttribute("aria-current", "page");
+      else btn.removeAttribute("aria-current");
+    });
+
+    qsa(".panel").forEach((panel) => {
+      panel.classList.toggle("is-active", panel.id === `tab-${tabName}`);
+    });
+
+    const info = TAB_INFO[tabName];
+    $("pageTitle").textContent = info.title;
+    $("pageSubtitle").textContent = info.subtitle;
+    closeSidebar();
+
+    if (push) {
+      const hash = `#${tabName}`;
+      if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+    }
+
+    try {
+      TAB_LOADERS[tabName]?.();
+    } catch {
+      /* loader trata seus erros */
+    }
+  }
+
+  qsa(".nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  });
+
+  /* Sidebar mobile */
+  function openSidebar() {
+    $("sidebar").classList.add("is-open");
+    $("sidebarScrim").hidden = false;
+  }
+  function closeSidebar() {
+    $("sidebar").classList.remove("is-open");
+    $("sidebarScrim").hidden = true;
+  }
+
+  $("mobileMenuBtn")?.addEventListener("click", openSidebar);
+  $("sidebarScrim")?.addEventListener("click", closeSidebar);
+
+  /* ------------------------------------------------------------------ */
+  /* Health                                                             */
+  /* ------------------------------------------------------------------ */
+
+  async function checkHealth() {
+    const pill = $("serverHealthPill");
+    const text = $("serverHealthText");
+    const sub = $("serverHealthSub");
+    try {
+      const data = await api("/healthz");
+      state.healthOk = true;
+      pill.classList.add("is-online");
+      pill.classList.remove("is-offline");
+      text.textContent = "Proxy online";
+      const enabled = data?.accounts?.enabled ?? 0;
+      const total = data?.accounts?.total ?? 0;
+      sub.textContent = total ? `${enabled}/${total} conta(s) ativa(s)` : "nenhuma conta conectada";
+      $("sidebarUptime").textContent = duration(data?.uptimeSec);
+      hideBanner();
+      return true;
+    } catch {
+      state.healthOk = false;
+      pill.classList.remove("is-online");
+      pill.classList.add("is-offline");
+      text.textContent = "Proxy offline";
+      sub.textContent = "verifique se o servidor está rodando";
+      $("sidebarUptime").textContent = "—";
+      showBanner("Não foi possível conectar ao proxy local em /healthz.");
+      return false;
+    }
+  }
+
+  function showBanner(message) {
+    const banner = $("globalBanner");
+    if (banner.hidden) {
+      $("globalBannerText").textContent = message;
+      banner.hidden = false;
+    }
+  }
+
+  function hideBanner() {
+    $("globalBanner").hidden = true;
+  }
+
+  $("globalBannerRetry")?.addEventListener("click", async () => {
+    const ok = await checkHealth();
+    if (ok) {
+      toast("Proxy reconectado.", "ok");
+      refreshAll();
+    }
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Dashboard                                                          */
+  /* ------------------------------------------------------------------ */
+
+  async function loadMetrics() {
+    try {
+      const data = await api(`/api/metrics?range=${encodeURIComponent(state.range)}`);
+      state.metrics = data?.stats || data?.metrics || data || {};
+      state.metricsError = null;
+      renderDashboard();
+    } catch (err) {
+      state.metricsError = err.message;
+      renderDashboardError(err.message);
+    }
+  }
+
+  function renderDashboardError(message) {
+    $("kpiTotalRequests").textContent = "—";
+    $("kpiSuccessRate").textContent = "—";
+    $("kpiAvgLatency").textContent = "—";
+    $("kpiTotalSub").textContent = "sem dados";
+    $("recentRequestsBody").innerHTML = `<tr><td colspan="7" class="td-empty">${esc(message)}</td></tr>`;
+  }
+
+  function renderDashboard() {
+    const m = state.metrics || {};
+    const kpi = m.kpis || m;
+
+    const total = Number(kpi.totalRequests ?? 0);
+    const successRate = kpi.successRate !== undefined ? Number(kpi.successRate) : total > 0 ? 100 : 0;
+    const avgLatency = Math.round(Number(kpi.avgLatencyMs ?? 0));
+    const p95 = Math.round(Number(kpi.p95LatencyMs ?? 0));
+    const promptTokens = Number(kpi.promptTokens ?? 0);
+    const completionTokens = Number(kpi.completionTokens ?? 0);
+    const totalTokens = Number(kpi.totalTokens ?? promptTokens + completionTokens);
+    const errorCount = Number(kpi.errorCount ?? Math.round(total * (1 - successRate / 100)));
+
+    const activeAccounts = state.accounts.filter((a) => a.enabled !== false);
+    const activeCount = Number(kpi.activeAccountsCount ?? activeAccounts.length);
+
+    /* KPIs */
+    $("kpiTotalRequests").innerHTML = total ? num(total) : "0";
+    $("kpiTotalSub").textContent = totalTokens
+      ? `${compact(totalTokens)} tokens processados`
+      : total
+        ? "sem contagem de tokens"
+        : "nenhuma chamada no período";
+
+    const rateTone = total === 0 ? "muted" : successRate >= 99 ? "ok" : successRate >= 90 ? "warn" : "err";
+    $("kpiSuccessRate").innerHTML =
+      total === 0
+        ? `<span style="color:var(--fg-3)">—</span>`
+        : `${successRate.toFixed(1).replace(".0", "").replace(".", ",")}<small>%</small>`;
+    $("kpiSuccessSub").textContent = total
+      ? `${num(errorCount)} erro(s)${rateTone === "ok" ? " · tudo saudável" : rateTone === "warn" ? " · atenção" : " · investigar"}`
+      : "aguardando requisições";
+
+    $("kpiAvgLatency").innerHTML = total
+      ? `${num(avgLatency)}<small>ms</small>`
+      : `<span style="color:var(--fg-3)">—</span>`;
+    $("kpiLatencySub").textContent = `P95 ${num(p95)} ms`;
+
+    $("kpiActiveAccounts").innerHTML = `${activeCount}<small>/${state.accounts.length}</small>`;
+    $("kpiAccountsSub").textContent = state.accounts.length
+      ? `${state.accounts.length} conta(s) conectada(s)`
+      : "Nenhuma conta conectada";
+    $("kpiAccountsBar").style.width = state.accounts.length
+      ? `${Math.round((activeCount / state.accounts.length) * 100)}%`
+      : "0%";
+
+    const series = m.timeSeries || m.series || [];
+    renderSparks(series, { successRate, avgLatency, total });
+    renderTimeSeriesChart(series);
+    renderModelsDonut(m.byModel || m.modelBreakdown || [], total);
+    renderAccountBars(m.byAccount || m.accountBreakdown || []);
+    renderContextPanel(kpi);
+
+    renderRecentRequests(m.recentRequests || m.recent || []);
+    $("chartRangeLabel").textContent = RANGE_LABELS[state.range] || state.range;
+  }
+
+  function renderSparks(series, { avgLatency }) {
+    const list = Array.isArray(series) ? series : [];
+    const reqs = list.map((d) => Number(d.requests ?? d.count ?? 0));
+    const lats = list.map((d) => Number(d.avgLatencyMs ?? d.latencyMs ?? 0));
+    const succ = list.map((d) => {
+      const req = Number(d.requests ?? 0);
+      const err = Number(d.errors ?? 0);
+      return req > 0 ? ((req - err) / req) * 100 : 0;
+    });
+
+    paintSpark($("kpiReqSpark"), reqs, "var(--brand)");
+    paintSpark($("kpiSuccessSpark"), succ, "var(--ok)", { baseline: 100 });
+    paintSpark($("kpiLatencySpark"), lats.length ? lats : [avgLatency], "var(--brand-2)");
+  }
+
+  function paintSpark(host, values, color, { baseline = null } = {}) {
+    if (!host) return;
+    const vals = values.filter((v) => Number.isFinite(v));
+    if (vals.length < 2 || vals.every((v) => v === 0)) {
+      host.innerHTML = `<div style="height:34px;display:flex;align-items:center;color:var(--fg-3);font-size:10px;letter-spacing:.03em">sem histórico</div>`;
+      return;
+    }
+    const w = 220;
+    const h = 34;
+    const pad = 2;
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const span = max - min || 1;
+    const xAt = (i) => pad + (i / (vals.length - 1)) * (w - pad * 2);
+    const yAt = (v) => pad + (1 - (v - min) / span) * (h - pad * 2);
+    const pts = vals.map((v, i) => `${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`);
+    const area = `M ${xAt(0).toFixed(1)},${h} L ${pts.join(" L ")} L ${xAt(vals.length - 1).toFixed(1)},${h} Z`;
+    const uid = `sp-${Math.random().toString(36).slice(2, 8)}`;
+
+    host.innerHTML = `
+      <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${color}" stop-opacity="0.34"/>
+            <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="${area}" fill="url(#${uid})"/>
+        <polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      </svg>`;
+  }
+
+  /* ---------- Gráfico principal ---------- */
+  function renderTimeSeriesChart(series) {
+    const stage = $("timeSeriesChart");
+    if (!stage) return;
+
+    const list = Array.isArray(series) ? series : [];
+    const hasData = list.some((d) => Number(d.requests ?? 0) > 0 || Number(d.avgLatencyMs ?? 0) > 0);
+
+    if (!list.length || !hasData) {
+      stage.innerHTML = `
+        <div class="chart-empty">
+          ${icon("i-activity")}
+          <span>Sem tráfego registrado ${esc((RANGE_LABELS[state.range] || "").toLowerCase())}.</span>
+          <span style="font-size:11px;opacity:.75">Faça uma chamada em <code>/v1/chat/completions</code> para ver dados aqui.</span>
+        </div>`;
+      return;
+    }
+
+    const width = Math.max(320, Math.floor(stage.clientWidth || 760));
+    const height = width < 620 ? 210 : 268;
+    const pad = { top: 16, right: width < 620 ? 34 : 48, bottom: 26, left: width < 620 ? 30 : 42 };
+    const innerW = width - pad.left - pad.right;
+    const innerH = height - pad.top - pad.bottom;
+
+    const reqVals = list.map((d) => Number(d.requests ?? d.count ?? 0));
+    const latVals = list.map((d) => Number(d.avgLatencyMs ?? d.latencyMs ?? 0));
+    const maxReq = Math.max(1, ...reqVals);
+    const maxLat = Math.max(1, ...latVals);
+
+    const xAt = (i) => (list.length === 1 ? pad.left + innerW / 2 : pad.left + (i / (list.length - 1)) * innerW);
+    const yReq = (v) => pad.top + innerH - (v / maxReq) * innerH;
+    const yLat = (v) => pad.top + innerH - (v / maxLat) * innerH;
+
+    const reqPts = reqVals.map((v, i) => [xAt(i), yReq(v)]);
+    const latPts = latVals.map((v, i) => [xAt(i), yLat(v)]);
+    const reqLine = reqPts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const latLine = latPts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const areaPath = `M ${reqPts[0][0].toFixed(1)},${(pad.top + innerH).toFixed(1)} L ${reqLine.replace(/ /g, " L ")} L ${reqPts[reqPts.length - 1][0].toFixed(1)},${(pad.top + innerH).toFixed(1)} Z`;
+
+    const gridCount = 4;
+    const grid = Array.from({ length: gridCount + 1 }, (_, i) => {
+      const t = i / gridCount;
+      const y = pad.top + innerH * t;
+      const reqLabel = Math.round(maxReq * (1 - t));
+      const latLabel = latencyShort(maxLat * (1 - t));
+      return `
+        <line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${width - pad.right}" y2="${y.toFixed(1)}"
+              stroke="currentColor" stroke-opacity="0.075" stroke-width="1" stroke-dasharray="${i === gridCount ? "0" : "3 5"}"/>
+        <text x="${pad.left - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end"
+              fill="currentColor" fill-opacity="0.42" font-size="9.5" font-family="var(--mono)">${reqLabel}</text>
+        ${
+          state.chartSeries.latency
+            ? `<text x="${width - pad.right + 8}" y="${(y + 3).toFixed(1)}" text-anchor="start"
+                     fill="currentColor" fill-opacity="0.34" font-size="9.5" font-family="var(--mono)">${latLabel}</text>`
+            : ""
+        }`;
+    }).join("");
+
+    const labelStep = Math.max(1, Math.ceil(list.length / (width < 620 ? 4 : 7)));
+    const xLabels = list
+      .map((d, i) => {
+        if (i % labelStep !== 0 && i !== list.length - 1) return "";
+        const label = d.label || (d.timestamp ? shortTime(d.timestamp) : `#${i + 1}`);
+        const anchor = i === 0 ? "start" : i === list.length - 1 ? "end" : "middle";
+        return `<text x="${xAt(i).toFixed(1)}" y="${height - 7}" text-anchor="${anchor}"
+                      fill="currentColor" fill-opacity="0.4" font-size="9.5">${esc(label)}</text>`;
+      })
+      .join("");
+
+    const peakIdx = reqVals.indexOf(maxReq);
+    const peak = peakIdx >= 0 ? reqPts[peakIdx] : null;
+
+    stage.innerHTML = `
+      <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="presentation">
+        <defs>
+          <linearGradient id="gradReq" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--brand)" stop-opacity="0.32"/>
+            <stop offset="70%" stop-color="var(--brand)" stop-opacity="0.06"/>
+            <stop offset="100%" stop-color="var(--brand)" stop-opacity="0"/>
+          </linearGradient>
+          <linearGradient id="gradReqLine" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="var(--brand)"/>
+            <stop offset="100%" stop-color="var(--brand-2)"/>
+          </linearGradient>
+        </defs>
+
+        ${grid}
+        ${xLabels}
+
+        ${state.chartSeries.requests ? `<path d="${areaPath}" fill="url(#gradReq)"/>` : ""}
+
+        ${
+          state.chartSeries.latency
+            ? `<polyline points="${latLine}" fill="none" stroke="var(--brand-2)" stroke-width="1.6"
+                        stroke-opacity="0.85" stroke-dasharray="4 4" stroke-linejoin="round" stroke-linecap="round"/>`
+            : ""
+        }
+
+        ${
+          state.chartSeries.requests
+            ? `<polyline points="${reqLine}" fill="none" stroke="url(#gradReqLine)" stroke-width="2.2"
+                        stroke-linejoin="round" stroke-linecap="round"/>`
+            : ""
+        }
+
+        ${
+          state.chartSeries.requests && peak
+            ? `<circle cx="${peak[0].toFixed(1)}" cy="${peak[1].toFixed(1)}" r="3.4" fill="var(--brand)"
+                       stroke="var(--bg)" stroke-width="2"/>`
+            : ""
+        }
+
+        <line id="tsGuide" x1="0" y1="${pad.top}" x2="0" y2="${pad.top + innerH}"
+              stroke="currentColor" stroke-opacity="0.24" stroke-width="1" stroke-dasharray="3 3" opacity="0"/>
+        <circle id="tsHoverDot" r="4.5" fill="var(--brand)" stroke="var(--bg)" stroke-width="2" opacity="0"/>
+        <rect id="tsOverlay" x="${pad.left}" y="${pad.top}" width="${innerW}" height="${innerH}"
+              fill="transparent" style="cursor:crosshair"/>
+      </svg>
+      <div class="chart-tooltip" id="tsTooltip"></div>`;
+
+    bindChartHover(stage, { list, xAt, reqVals, latVals, pad, innerW, innerH });
+  }
+
+  function latencyShort(v) {
+    const n = Math.round(Number(v) || 0);
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(".", ",")}s`;
+    return `${n}ms`;
+  }
+
+  function shortTime(val) {
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) return String(val);
+    return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function bindChartHover(stage, { list, xAt, reqVals, latVals, pad, innerW, innerH }) {
+    const overlay = qs("#tsOverlay", stage);
+    const guide = qs("#tsGuide", stage);
+    const dot = qs("#tsHoverDot", stage);
+    const tip = qs("#tsTooltip", stage);
+    if (!overlay || !tip) return;
+
+    let activeIndex = -1;
+
+    const move = (clientX) => {
+      const rect = overlay.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1)));
+      const idx = Math.min(list.length - 1, Math.max(0, Math.round(ratio * (list.length - 1))));
+      if (idx === activeIndex) return;
+      activeIndex = idx;
+
+      const item = list[idx] || {};
+      const x = xAt(idx);
+      guide.setAttribute("x1", x.toFixed(1));
+      guide.setAttribute("x2", x.toFixed(1));
+      guide.setAttribute("opacity", "1");
+
+      if (state.chartSeries.requests) {
+        dot.setAttribute("cx", x.toFixed(1));
+        dot.setAttribute("cy", (pad.top + innerH - (reqVals[idx] / Math.max(1, Math.max(...reqVals))) * innerH).toFixed(1));
+        dot.setAttribute("opacity", "1");
+      } else {
+        dot.setAttribute("opacity", "0");
+      }
+
+      const label = item.label || fmtDate(item.timestamp, { seconds: true });
+      const errs = Number(item.errors ?? 0);
+      tip.innerHTML = `
+        <b>${esc(label)}</b>
+        <div class="row"><span><i style="background:var(--brand)"></i>Requisições</span><em>${num(reqVals[idx])}</em></div>
+        <div class="row"><span><i style="background:var(--brand-2)"></i>Latência</span><em>${num(Math.round(latVals[idx]))} ms</em></div>
+        ${errs > 0 ? `<div class="row"><span><i style="background:var(--err)"></i>Erros</span><em>${num(errs)}</em></div>` : ""}`;
+
+      tip.classList.add("is-visible");
+      const stageRect = stage.getBoundingClientRect();
+      const dotRect = dot.getBoundingClientRect();
+      const relX = dotRect.left - stageRect.left;
+      const relY = dotRect.top - stageRect.top;
+      const tipW = tip.offsetWidth || 150;
+      const left = Math.min(stageRect.width - tipW - 6, Math.max(6, relX - tipW / 2));
+      tip.style.left = `${left}px`;
+      tip.style.top = `${Math.max(4, relY - (tip.offsetHeight || 80) - 12)}px`;
+    };
+
+    overlay.addEventListener("mousemove", (e) => move(e.clientX));
+    overlay.addEventListener("mouseleave", () => {
+      activeIndex = -1;
+      guide.setAttribute("opacity", "0");
+      dot.setAttribute("opacity", "0");
+      tip.classList.remove("is-visible");
+    });
+    overlay.addEventListener("touchstart", (e) => move(e.touches[0].clientX), { passive: true });
+    overlay.addEventListener("touchmove", (e) => move(e.touches[0].clientX), { passive: true });
+  }
+
+  qsa("#chartLegend .legend-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.series;
+      const next = !state.chartSeries[key];
+      const other = key === "requests" ? "latency" : "requests";
+      if (!next && !state.chartSeries[other]) return; // mantém ao menos uma série
+      state.chartSeries[key] = next;
+      btn.classList.toggle("is-on", next);
+      btn.setAttribute("aria-pressed", String(next));
+      renderTimeSeriesChart(state.metrics?.timeSeries || state.metrics?.series || []);
+    });
+  });
+
+  /* ---------- Donut por modelo ---------- */
+  function renderModelsDonut(items, totalRequests) {
+    const host = $("modelsBreakdownChart");
+    if (!host) return;
+    const list = (Array.isArray(items) ? items : []).slice(0, 6);
+    if (!list.length) {
+      host.innerHTML = `<div class="chart-empty">${icon("i-cpu")}<span>Nenhum uso por modelo no período.</span></div>`;
+      return;
+    }
+
+    const total = list.reduce((acc, it) => acc + Number(it.requests ?? it.count ?? 0), 0) || 1;
+    const palette = [
+      "var(--brand)",
+      "var(--brand-2)",
+      "var(--brand-3)",
+      "#f472b6",
+      "#fbbf24",
+      "#60a5fa",
+    ];
+
+    const R = 44;
+    const C = 2 * Math.PI * R;
+    let offset = 0;
+
+    const arcs = list
+      .map((it, i) => {
+        const value = Number(it.requests ?? it.count ?? 0);
+        const frac = value / total;
+        const len = Math.max(0, frac * C - 2);
+        const seg = `<circle cx="60" cy="60" r="${R}" fill="none"
+            stroke="${palette[i % palette.length]}" stroke-width="12"
+            stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}"
+            stroke-dashoffset="${(-offset).toFixed(2)}" stroke-linecap="round"/>`;
+        offset += frac * C;
+        return seg;
+      })
+      .join("");
+
+    const legend = list
+      .map((it, i) => {
+        const name = it.model || it.name || it.label || it.id || "desconhecido";
+        const value = Number(it.requests ?? it.count ?? 0);
+        const pct = Math.round((value / total) * 100);
+        return `<div class="donut-item">
+            <i style="background:${palette[i % palette.length]}"></i>
+            <span title="${esc(name)}">${esc(name)}</span>
+            <b>${pct}%</b>
+          </div>`;
+      })
+      .join("");
+
+    host.innerHTML = `
+      <div class="donut">
+        <div class="donut-figure">
+          <svg viewBox="0 0 120 120" width="104" height="104" aria-hidden="true">
+            <circle cx="60" cy="60" r="${R}" fill="none" stroke="currentColor" stroke-opacity="0.08" stroke-width="12"/>
+            ${arcs}
+          </svg>
+          <div class="donut-center">
+            <div>
+              <strong>${compact(totalRequests || total)}</strong>
+              <small>req</small>
+            </div>
+          </div>
+        </div>
+        <div class="donut-legend">${legend}</div>
+      </div>`;
+  }
+
+  /* ---------- Barras por conta ---------- */
+  function renderAccountBars(items) {
+    const host = $("accountsBreakdownChart");
+    if (!host) return;
+    const list = Array.isArray(items) ? items.slice(0, 6) : [];
+    if (!list.length) {
+      host.innerHTML = `<div class="chart-empty">${icon("i-users")}<span>Nenhum uso por conta no período.</span></div>`;
+      return;
+    }
+    const maxVal = Math.max(1, ...list.map((x) => Number(x.requests ?? x.count ?? 0)));
+
+    const bars = list
+      .map((it) => {
+        const name = it.accountLabel || it.label || it.accountId || "conta";
+        const value = Number(it.requests ?? it.count ?? 0);
+        const rate = it.successRate !== undefined ? Number(it.successRate) : 100;
+        const lat = Number(it.avgLatencyMs ?? 0);
+        const errs = Number(it.errors ?? 0);
+        const pct = Math.max(3, Math.round((value / maxVal) * 100));
+        const tone = rate >= 99 ? "" : rate >= 90 ? "is-warn" : "is-err";
+        return `<div class="bar">
+            <div class="bar-meta">
+              <span title="${esc(name)}">${esc(name)}</span>
+              <b>${num(value)} req</b>
+            </div>
+            <div class="bar-track ${tone}"><span style="width:${pct}%"></span></div>
+            <div class="bar-foot">
+              <span>${rate.toFixed(0)}% ok</span>
+              <span>${lat ? `${num(Math.round(lat))} ms` : "—"}</span>
+              ${errs ? `<span style="color:var(--err)">${num(errs)} erro(s)</span>` : ""}
+            </div>
+          </div>`;
+      })
+      .join("");
+
+    const totals = list.reduce(
+      (acc, it) => {
+        acc.req += Number(it.requests ?? 0);
+        acc.err += Number(it.errors ?? 0);
+        acc.latSum += Number(it.avgLatencyMs ?? 0) * Number(it.requests ?? 0);
+        return acc;
+      },
+      { req: 0, err: 0, latSum: 0 }
+    );
+    const avgLat = totals.req > 0 ? Math.round(totals.latSum / totals.req) : 0;
+
+    host.innerHTML = `
+      <div class="bars">${bars}</div>
+      <div class="bar-summary">
+        <div><span>Total</span><b>${num(totals.req)}</b></div>
+        <div><span>Latência média</span><b>${avgLat ? `${num(avgLat)} ms` : "—"}</b></div>
+        <div><span>Erros</span><b style="${totals.err ? "color:var(--err)" : ""}">${num(totals.err)}</b></div>
+      </div>`;
+  }
+
+  /* ---------- Contexto ---------- */
+  function renderContextPanel(kpi) {
+    $("ctxIn").textContent = compact(kpi.promptTokens ?? 0);
+    $("ctxOut").textContent = compact(kpi.completionTokens ?? 0);
+    const util = Math.min(100, Math.max(0, Number(kpi.avgContextUtilizationPct ?? 0)));
+    $("ctxUtilValue").textContent = `${util}%`;
+    $("ctxUtilBar").style.width = `${util}%`;
+    $("ctxP95").textContent = `${num(Math.round(Number(kpi.p95LatencyMs ?? 0)))} ms`;
+    $("ctxTrimmed").textContent = num(kpi.compactionCount ?? 0);
+  }
+
+  /* ---------- Tabela recente ---------- */
+  function sortRows(rows) {
+    const { key, dir } = state.sort;
+    const mult = dir === "asc" ? 1 : -1;
+    const valueOf = (r) => {
+      switch (key) {
+        case "model":
+          return String(r.model || "").toLowerCase();
+        case "account":
+          return String(r.accountLabel || r.accountId || "").toLowerCase();
+        case "latency":
+          return Number(r.latencyMs || 0);
+        case "context":
+          return Number(r.estimatedInputTokens || 0);
+        case "status":
+          return Number(r.status || 0);
+        default:
+          return Date.parse(r.timestamp) || 0;
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const va = valueOf(a);
+      const vb = valueOf(b);
+      if (typeof va === "string") return va.localeCompare(vb) * mult;
+      return (va - vb) * mult;
+    });
+  }
+
+  function renderRecentRequests(rows) {
+    const tbody = $("recentRequestsBody");
+    const list = Array.isArray(rows) ? rows : [];
+    $("recentCountBadge").textContent = `${list.length} registro${list.length === 1 ? "" : "s"}`;
+
+    if (!list.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="td-empty">Nenhuma requisição registrada no período.</td></tr>`;
+      return;
+    }
+
+    const sorted = sortRows(list).slice(0, 60);
+
+    tbody.innerHTML = sorted
+      .map((r) => {
+        const ok = r.ok !== undefined ? Boolean(r.ok) : Number(r.status || 200) < 400;
+        const statusCode = r.status || (ok ? 200 : 500);
+        const statusBadge = ok
+          ? `<span class="badge badge-ok">${statusCode}</span>`
+          : `<span class="badge badge-err">${statusCode}</span>`;
+        const mode = r.stream
+          ? `<span class="badge badge-cyan">stream</span>`
+          : `<span class="badge badge-muted">json</span>`;
+
+        const est = Number(r.estimatedInputTokens) || 0;
+        const limit = Number(r.contextLimit) || 0;
+        const utilPct = Number(r.contextUtilizationPct) || (limit > 0 ? Math.round((est / limit) * 100) : 0);
+        const ctxLabel = limit > 0 ? `${compact(est)} / ${compact(limit)}` : est ? `${compact(est)}` : "—";
+        const trim = r.clientCompacted
+          ? `<span class="badge badge-cyan" title="O cliente compactou o histórico (${esc(r.compactionKind || "resumo")})">ckpt</span>`
+          : "";
+
+        const d = r.timestamp ? new Date(r.timestamp) : null;
+        const validDate = d && !Number.isNaN(d.getTime());
+        const dateMain = validDate
+          ? d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+          : "—";
+        const dateSub = validDate
+          ? d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })
+          : "";
+
+        return `<tr>
+          <td class="cell-time">${dateMain}<small>${dateSub}</small></td>
+          <td class="cell-model"><code title="${esc(r.model)}">${esc(r.model || "—")}</code></td>
+          <td>${esc(r.accountLabel || r.accountId || "—")}</td>
+          <td class="cell-lat ${latencyClass(r.latencyMs)}">${num(Math.round(r.latencyMs || 0))}<span style="opacity:.5;font-size:10px"> ms</span></td>
+          <td class="col-ctx">
+            <div class="ctx-cell">
+              ${limit > 0 ? `<span class="ctx-mini ${utilPct >= 85 ? "is-high" : ""}"><span style="width:${Math.min(100, utilPct)}%"></span></span>` : ""}
+              <span style="font-size:11px;color:var(--fg-3)">${ctxLabel}</span>
+              ${trim}
+            </div>
+          </td>
+          <td>${statusBadge}</td>
+          <td class="col-mode">${mode}</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  qsa("#recentTable th button.sort").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.sort;
+      if (state.sort.key === key) {
+        state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+      } else {
+        state.sort.key = key;
+        state.sort.dir = key === "timestamp" ? "desc" : "desc";
+      }
+      qsa("#recentTable th").forEach((th) => th.setAttribute("aria-sort", "none"));
+      const th = btn.closest("th");
+      th?.setAttribute("aria-sort", state.sort.dir === "asc" ? "ascending" : "descending");
+      renderRecentRequests(state.metrics?.recentRequests || state.metrics?.recent || []);
+    });
+  });
+
+  /* ---------- Range / export / reset ---------- */
+  qsa("#metricsRangePills button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      qsa("#metricsRangePills button").forEach((b) => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+      state.range = btn.dataset.range;
+      $("chartRangeLabel").textContent = RANGE_LABELS[state.range] || state.range;
+      try {
+        localStorage.setItem("dp-range", state.range);
+      } catch {
+        /* ignore */
+      }
+      loadMetrics();
+    });
+  });
+
+  $("btnExportMetrics").addEventListener("click", async () => {
+    try {
+      const data = await api(`/api/metrics?range=${encodeURIComponent(state.range)}`);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `deepai-proxy-metrics-${state.range}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      toast("Métricas exportadas.", "ok");
+    } catch (err) {
+      toast(`Falha ao exportar: ${err.message}`, "err");
+    }
+  });
+
+  $("btnResetMetrics").addEventListener("click", async () => {
+    const ok = await confirmAction({
+      title: "Resetar métricas?",
+      desc: "Todo o histórico de requisições e contadores serão apagados. Contas e configurações não são afetadas. Esta ação não pode ser desfeita.",
+      confirm: "Resetar tudo",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api("/api/metrics/reset", { method: "POST", body: {} });
+      toast("Métricas resetadas.", "ok");
+      await loadMetrics();
+    } catch (err) {
+      toast(`Erro ao resetar: ${err.message}`, "err");
+    }
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Contas                                                             */
+  /* ------------------------------------------------------------------ */
+
+  async function loadAccounts() {
+    try {
+      const data = await api("/api/accounts");
+      state.accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+      state.activeAccountId = data?.activeAccountId || null;
+      $("navAccountsCount").textContent = String(state.accounts.length);
+      $("accountsTotalBadge").textContent = `${state.accounts.length} conta${state.accounts.length === 1 ? "" : "s"}`;
+      const enabled = state.accounts.filter((a) => a.enabled !== false).length;
+      $("accountsActiveBadge").textContent = `${enabled} ativa${enabled === 1 ? "" : "s"}`;
+      renderAccounts();
+      if (state.tab === "dashboard") renderDashboard();
+    } catch (err) {
+      state.accounts = [];
+      $("accountsList").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+    }
+  }
+
+  function renderAccounts() {
+    const host = $("accountsList");
+    if (!state.accounts.length) {
+      host.innerHTML = `<div class="empty">
+        Nenhuma conta conectada. Use o login DeepAI ou importe uma API key acima para começar.
+      </div>`;
+      return;
+    }
+
+    host.innerHTML = state.accounts
+      .map((acc) => {
+        const isActive = acc.id === state.activeAccountId;
+        const enabled = acc.enabled !== false;
+        const isPro = Boolean(acc.isPro);
+        const cooling = Boolean(acc.isCoolingDown);
+
+        const title = acc.label || acc.username || acc.email || acc.id;
+        const keyPreview = acc.keyPreview || acc.maskedKey || acc.apiKeyPreview || "";
+        const authType = acc.authType === "oauth" ? "OAuth" : acc.authType === "cookie" ? "Cookie" : "API key";
+
+        const tier = isPro
+          ? `<span class="badge badge-pro">PRO</span>`
+          : `<span class="badge badge-cyan">FREE</span>`;
+        const stateBadge = !enabled
+          ? `<span class="badge badge-muted">desabilitada</span>`
+          : cooling
+            ? `<span class="badge badge-warn">cooldown</span>`
+            : isActive
+              ? `<span class="badge badge-ok">ativa</span>`
+              : `<span class="badge badge-muted">pronta</span>`;
+
+        return `<article class="account-card ${isActive ? "is-active" : ""} ${!enabled ? "is-disabled" : ""}">
+          <div class="account-head">
+            <span class="account-avatar">${esc(initials(title))}</span>
+            <div class="account-id">
+              <div class="account-name">
+                ${isActive ? icon("i-star") : ""}
+                <span style="overflow:hidden;text-overflow:ellipsis">${esc(title)}</span>
+              </div>
+              <div class="account-user">${acc.username ? esc(acc.username) : esc(authType)}${keyPreview ? ` · ${esc(keyPreview)}` : ""}</div>
+            </div>
+            <div class="account-badges">${tier}${stateBadge}</div>
+          </div>
+
+          <div class="account-stats">
+            <div><span>Requisições</span><b>${num(acc.requestCount ?? 0)}</b></div>
+            <div><span>Erros</span><b>${num(acc.errorCount ?? 0)}</b></div>
+            <div><span>Último uso</span><b>${esc(timeAgo(acc.lastUsedAt))}</b></div>
+          </div>
+
+          ${acc.lastError ? `<div class="account-err">${icon("i-alert")}<span>${esc(acc.lastError)}</span></div>` : ""}
+
+          <div class="account-actions">
+            ${!isActive ? `<button class="btn btn-ghost btn-xs" data-action="select" data-id="${esc(acc.id)}" type="button">${icon("i-star")} Ativar</button>` : ""}
+            <button class="btn btn-secondary btn-xs" data-action="test" data-id="${esc(acc.id)}" type="button">${icon("i-wifi")} Testar</button>
+            <button class="btn btn-ghost btn-xs" data-action="rename" data-id="${esc(acc.id)}" type="button" aria-label="Renomear">${icon("i-edit")}</button>
+            <button class="btn btn-ghost btn-xs" data-action="toggle" data-id="${esc(acc.id)}" data-enabled="${enabled}" type="button">${enabled ? "Desativar" : "Ativar"}</button>
+            <button class="btn btn-danger btn-xs" data-action="delete" data-id="${esc(acc.id)}" type="button" aria-label="Remover">${icon("i-trash")}</button>
+          </div>
+        </article>`;
+      })
+      .join("");
+  }
+
+  $("accountsList").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    const { action, id } = btn.dataset;
+    const acc = state.accounts.find((a) => a.id === id);
+
+    if (action === "delete") {
+      const ok = await confirmAction({
+        title: "Remover conta?",
+        desc: `A conta "${acc?.label || id}" será removida deste proxy. Você pode reconectá-la depois.`,
+        confirm: "Remover",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+
+    if (action === "rename") {
+      const name = await confirmAction({
+        title: "Renomear conta",
+        desc: "Escolha um nome curto para identificar esta conta no painel.",
+        confirm: "Salvar",
+        input: { value: acc?.label || "", placeholder: "Ex: Conta principal", maxlength: 100 },
+      });
+      if (!name) return;
+      btn.disabled = true;
+      try {
+        await api(`/api/accounts/${encodeURIComponent(id)}`, { method: "PATCH", body: { label: name } });
+        toast("Conta renomeada.", "ok");
+        await loadAccounts();
+      } catch (err) {
+        toast(`Erro: ${err.message}`, "err");
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
+
+    btn.disabled = true;
+    const busy = btn.classList.contains("btn-secondary");
+    if (busy) btn.classList.add("is-busy");
+
+    try {
+      if (action === "select") {
+        await api("/api/accounts/select", { method: "POST", body: { id } });
+        toast("Conta ativa definida.", "ok");
+        await loadAccounts();
+      } else if (action === "test") {
+        const res = await api(`/api/accounts/${encodeURIComponent(id)}/test`, { method: "POST", body: {} });
+        const result = res?.result || res;
+        const valid = result?.ok !== false && result?.valid !== false;
+        const isPro = Boolean(result?.isPro ?? res?.account?.isPro);
+        toast(
+          valid
+            ? `Conexão OK · plano ${isPro ? "PRO" : "FREE"}`
+            : `Falha na verificação: ${result?.error || "credencial inválida"}`,
+          valid ? "ok" : "err",
+          4600
+        );
+        await loadAccounts();
+      } else if (action === "toggle") {
+        const currentlyEnabled = btn.dataset.enabled === "true";
+        await api(`/api/accounts/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: { enabled: !currentlyEnabled },
+        });
+        toast(currentlyEnabled ? "Conta desabilitada." : "Conta habilitada.", "ok");
+        await loadAccounts();
+      } else if (action === "delete") {
+        await api(`/api/accounts/${encodeURIComponent(id)}`, { method: "DELETE" });
+        toast("Conta removida.", "ok");
+        await loadAccounts();
+      }
+    } catch (err) {
+      toast(`Erro: ${err.message}`, "err");
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("is-busy");
+    }
+  });
+
+  /* ---------- Login OAuth ---------- */
+  function renderAuthState(auth) {
+    const a = auth || {};
+    const pending = Boolean(a.pending);
+    const status = pending
+      ? "pending"
+      : a.lastError
+        ? "error"
+        : a.savedAccount
+          ? "connected"
+          : "idle";
+
+    const pill = $("authStatusPill");
+    pill.dataset.status = status;
+    pill.textContent = pending ? "aguardando" : status === "error" ? "erro" : status === "connected" ? "conectado" : "idle";
+
+    const url = a.loginUrl || a.url || "";
+    const panel = $("authLinkPanel");
+    if (pending && url) {
+      panel.hidden = false;
+      $("loginUrlInput").value = url;
+      $("btnOpenLoginUrl").href = url;
+      $("authLoginId").textContent = a.loginId || "—";
+      $("authExpiresAt").textContent = a.expiresAt ? fmtDate(a.expiresAt, { seconds: true }) : "—";
+      startAuthPolling();
+      startAuthCountdown(a.expiresAt);
+    } else {
+      panel.hidden = true;
+      stopAuthCountdown();
+      if (!pending) stopAuthPolling();
+    }
+
+    $("btnCancelLogin").disabled = !pending;
+    $("btnStartLogin").disabled = pending;
+
+    const notice = $("authNotice");
+    const text = $("authNoticeText");
+    notice.classList.remove("is-ok", "is-err");
+
+    if (pending) {
+      text.textContent = "Aguardando login no navegador. A conta aparece automaticamente aqui ao concluir.";
+    } else if (a.lastError) {
+      notice.classList.add("is-err");
+      text.textContent = `Erro no login: ${a.lastError}`;
+    } else if (a.savedAccount) {
+      notice.classList.add("is-ok");
+      text.textContent = `Conta conectada: ${a.savedAccount.label || a.savedAccount.id}`;
+    } else {
+      text.textContent = "Pronto para conectar uma nova conta.";
+    }
+  }
+
+  function startAuthCountdown(expiresAt) {
+    stopAuthCountdown();
+    const el = $("authCountdown");
+    if (!expiresAt) {
+      el.textContent = "";
+      return;
+    }
+    const tick = () => {
+      const left = Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000));
+      el.textContent = left > 0 ? `(${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")})` : "(expirado)";
+    };
+    tick();
+    state.authTickTimer = setInterval(tick, 1000);
+  }
+
+  function stopAuthCountdown() {
+    if (state.authTickTimer) {
+      clearInterval(state.authTickTimer);
+      state.authTickTimer = null;
+    }
+  }
+
+  function startAuthPolling() {
+    if (state.authPollTimer) return;
+    state.authPollTimer = setInterval(async () => {
+      const wasPending = $("authStatusPill").dataset.status === "pending";
+      const auth = await refreshAuthStatus();
+      if (wasPending && auth && !auth.pending) {
+        await loadAccounts();
+        if (auth.savedAccount) toast("Conta conectada com sucesso.", "ok");
+      }
+    }, 1800);
+  }
+
+  function stopAuthPolling() {
+    if (state.authPollTimer) {
+      clearInterval(state.authPollTimer);
+      state.authPollTimer = null;
+    }
+  }
+
+  async function refreshAuthStatus() {
+    try {
+      const data = await api("/api/auth/status");
+      const auth = data?.auth || data?.login || data || {};
+      renderAuthState(auth);
+      return auth;
+    } catch {
+      return null;
+    }
+  }
+
+  $("btnStartLogin").addEventListener("click", async () => {
+    const btn = $("btnStartLogin");
+    const label = $("newAccountLabel").value.trim();
+    btn.disabled = true;
+    btn.classList.add("is-busy");
+    try {
+      const data = await api("/api/auth/login", { method: "POST", body: label ? { label } : {} });
+      renderAuthState(data?.auth || data?.login || data);
+      toast("Link gerado. Abra no navegador para autorizar.", "ok", 4200);
+    } catch (err) {
+      toast(`Falha ao iniciar login: ${err.message}`, "err");
+      btn.disabled = false;
+    } finally {
+      btn.classList.remove("is-busy");
+    }
+  });
+
+  $("btnCancelLogin").addEventListener("click", async () => {
+    try {
+      const data = await api("/api/auth/cancel", { method: "POST", body: {} });
+      renderAuthState(data?.auth || data?.login || data);
+      toast("Sessão de login cancelada.", "ok");
+    } catch (err) {
+      toast(`Falha ao cancelar: ${err.message}`, "err");
+    }
+  });
+
+  $("btnCopyLoginUrl").addEventListener("click", () => {
+    copyText($("loginUrlInput").value, "Link de login copiado.");
+  });
+
+  $("btnSubmitManualCallback").addEventListener("click", async (e) => {
+    const value = $("manualCallbackInput").value.trim();
+    if (!value) return toast("Cole a URL de callback ou o código.", "err");
+    const isUrl = /^https?:\/\//i.test(value);
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.classList.add("is-busy");
+    try {
+      const data = await api("/api/auth/submit", {
+        method: "POST",
+        body: isUrl ? { callbackUrl: value } : { code: value },
+      });
+      $("manualCallbackInput").value = "";
+      renderAuthState(data?.auth || data);
+      await loadAccounts();
+      toast("Callback processado.", "ok");
+    } catch (err) {
+      toast(`Erro no callback: ${err.message}`, "err");
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("is-busy");
+    }
+  });
+
+  /* ---------- Importar chave ---------- */
+  $("btnToggleImportKey").addEventListener("click", () => {
+    const input = $("importKeyValue");
+    const showing = input.type === "text";
+    input.type = showing ? "password" : "text";
+    $("btnToggleImportKey").innerHTML = icon(showing ? "i-eye" : "i-eye-off");
+  });
+
+  $("btnImportKey").addEventListener("click", async () => {
+    const apiKey = $("importKeyValue").value.trim();
+    const label = $("importKeyLabel").value.trim();
+    if (!apiKey) {
+      $("importKeyValue").focus();
+      return toast("Informe a API key ou token.", "err");
+    }
+    const btn = $("btnImportKey");
+    btn.disabled = true;
+    btn.classList.add("is-busy");
+    try {
+      await api("/api/accounts/import-key", {
+        method: "POST",
+        body: { apiKey, label: label || undefined },
+      });
+      $("importKeyValue").value = "";
+      $("importKeyLabel").value = "";
+      toast("Conta importada.", "ok");
+      await loadAccounts();
+    } catch (err) {
+      toast(`Erro ao importar: ${err.message}`, "err");
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("is-busy");
+    }
+  });
+
+  /* ---------- Estratégia ---------- */
+  $("rotationStrategyGroup").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".strategy");
+    if (!btn) return;
+    const strategy = btn.dataset.strategy;
+    if (strategy === state.config.rotationStrategy) return;
+    const previous = state.config.rotationStrategy;
+    state.config.rotationStrategy = strategy;
+    renderStrategyButtons();
+    try {
+      const data = await api("/api/config", { method: "PUT", body: { rotationStrategy: strategy } });
+      if (data?.config) state.config = { ...state.config, ...data.config };
+      renderStrategyButtons();
+      toast("Estratégia de rotação atualizada.", "ok");
+    } catch (err) {
+      state.config.rotationStrategy = previous;
+      renderStrategyButtons();
+      toast(`Erro: ${err.message}`, "err");
+    }
+  });
+
+  function renderStrategyButtons() {
+    const current = state.config.rotationStrategy || "round-robin";
+    qsa(".strategy").forEach((btn) => {
+      const on = btn.dataset.strategy === current;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-checked", String(on));
+    });
+    const labels = { active: "Conta ativa", "round-robin": "Round-robin", failover: "Failover" };
+    $("sidebarStrategy").textContent = labels[current] || current;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Modelos                                                            */
+  /* ------------------------------------------------------------------ */
+
+  async function loadModels() {
+    try {
+      const data = await api("/api/models");
+      const list = Array.isArray(data?.models) ? data.models : Array.isArray(data?.data) ? data.data : [];
+      state.models = list;
+      const free = data?.counts?.free ?? list.filter((m) => m.tier !== "paid" && !m.isPro).length;
+      const paid = data?.counts?.paid ?? list.filter((m) => m.tier === "paid" || m.isPro).length;
+      state.modelsMeta = { total: list.length, free, paid };
+
+      $("navModelsCount").textContent = String(list.length);
+      $("countModelsAll").textContent = String(list.length);
+      $("countModelsFree").textContent = String(free);
+      $("countModelsPaid").textContent = String(paid);
+
+      renderModels();
+    } catch (err) {
+      $("modelsGrid").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+      $("modelsResultCount").textContent = "Falha ao carregar o catálogo.";
+    }
+  }
+
+  const MODEL_LOGOS = [
+    [/anthropic|claude/i, "anthropic"],
+    [/google|gemini/i, "gemini"],
+    [/deepseek/i, "deepseek"],
+    [/alibaba|qwen/i, "qwen"],
+    [/xiaomi|mimo/i, "xiaomi"],
+    [/minimax/i, "minimax"],
+    [/openai|gpt/i, "openai"],
+    [/moonshot|kimi/i, "kimi"],
+    [/zhipu|chatglm|\bglm\b/i, "chatglm"],
+    [/upstage|solar/i, "upstage"],
+    [/deepai|muse|glyph|cyber/i, "deepai"],
+  ];
+
+  function modelLogo(m) {
+    const hay = `${m.provider || ""} ${m.id || ""} ${m.name || ""}`;
+    const hit = MODEL_LOGOS.find(([re]) => re.test(hay));
+    return hit ? `/logos/${hit[1]}.svg` : null;
+  }
+
+  function renderModels() {
+    const grid = $("modelsGrid");
+    const q = state.modelsSearch.toLowerCase();
+
+    const filtered = state.models.filter((m) => {
+      const isPro = m.tier === "paid" || Boolean(m.isPro);
+      if (state.modelsTier === "free" && isPro) return false;
+      if (state.modelsTier === "paid" && !isPro) return false;
+      if (!q) return true;
+      const hay = `${m.id || ""} ${m.name || ""} ${m.provider || ""} ${m.description || ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+
+    $("modelsResultCount").textContent = `${filtered.length} de ${state.models.length} modelos`;
+
+    if (!filtered.length) {
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">Nenhum modelo corresponde a este filtro.</div>`;
+      return;
+    }
+
+    grid.innerHTML = filtered
+      .map((m) => {
+        const isPro = m.tier === "paid" || Boolean(m.isPro);
+        const tags = [];
+
+        if (m.contextWindow) tags.push(`<span class="badge badge-muted">${compact(m.contextWindow)} ctx</span>`);
+        if (m.maxTokens) tags.push(`<span class="badge badge-muted">${compact(m.maxTokens)} out</span>`);
+        const caps = Array.isArray(m.capabilities)
+          ? m.capabilities
+          : m.capabilities?.input || [];
+        (Array.isArray(caps) ? caps : []).forEach((c) => {
+          if (c === "image") tags.push(`<span class="badge badge-brand">visão</span>`);
+          else if (c === "text") return;
+          else tags.push(`<span class="badge badge-brand">${esc(c)}</span>`);
+        });
+        if (m.theosPerRequest && m.theosPerRequest !== "0") {
+          tags.push(`<span class="badge badge-warn">${esc(m.theosPerRequest)} theos</span>`);
+        }
+
+        const label = isPro ? "PRO" : "FREE";
+
+        return `<article class="model-card ${isPro ? "is-pro" : ""}">
+          <div class="model-top">
+            <div class="model-ident">
+              <span class="model-mark">${modelLogo(m) ? `<span class="model-logo" style="--logo:url(${modelLogo(m)})" aria-hidden="true"></span>` : esc((m.provider || "DA").slice(0, 2))}</span>
+              <div style="min-width:0">
+                <h3 title="${esc(m.name || m.id)}">${esc(m.name || m.id)}</h3>
+                <div class="model-provider">${esc(m.provider || "DeepAI")}</div>
+              </div>
+            </div>
+            <span class="badge ${isPro ? "badge-pro" : "badge-cyan"}">${label}</span>
+          </div>
+
+          <div class="model-id">
+            <code title="${esc(m.id)}">${esc(m.id)}</code>
+            <button class="icon-btn" data-copy-model="${esc(m.id)}" type="button" aria-label="Copiar ID do modelo">${icon("i-copy")}</button>
+          </div>
+
+          <p class="model-desc">${esc(m.description || "Compatível com chat completions.")}</p>
+          <div class="model-tags">${tags.join("")}</div>
+        </article>`;
+      })
+      .join("");
+  }
+
+  $("modelsSearchInput").addEventListener("input", (e) => {
+    state.modelsSearch = e.target.value.trim();
+    renderModels();
+  });
+
+  $("modelsTierFilters").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-tier]");
+    if (!btn) return;
+    qsa("#modelsTierFilters button").forEach((b) => b.setAttribute("aria-pressed", "false"));
+    btn.setAttribute("aria-pressed", "true");
+    state.modelsTier = btn.dataset.tier;
+    renderModels();
+  });
+
+  $("modelsGrid").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-copy-model]");
+    if (!btn) return;
+    copyText(btn.dataset.copyModel, `ID "${btn.dataset.copyModel}" copiado.`);
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Configurações                                                      */
+  /* ------------------------------------------------------------------ */
+
+  async function loadConfig() {
+    try {
+      const data = await api("/api/config");
+      const cfg = data?.config || data || {};
+      state.config = { ...state.config, ...cfg };
+      renderConfig();
+    } catch (err) {
+      toast(`Falha ao carregar configurações: ${err.message}`, "err");
+    }
+  }
+
+  function renderConfig() {
+    $("cfgRequireApiKey").checked = state.config.requireApiKey !== false;
+    $("cfgProxyApiKey").value = state.config.proxyApiKey || "";
+    renderStrategyButtons();
+    renderCodeExample();
+    renderContextConfig();
+    $("sidebarBaseUrl").textContent = `${window.location.host}/v1`;
+  }
+
+  function renderContextConfig() {
+    const cm = state.config.contextManagement || {};
+
+    $("ctxModeBadge").textContent = "Pass-through";
+    $("cfgCtxDetect").value = cm.detectCompaction === false ? "off" : "on";
+  }
+
+  /* ---------- Exemplos de código ---------- */
+  const CODE_SAMPLES = () => {
+    const baseUrl = `${window.location.origin}/v1`;
+    const key = state.config.proxyApiKey || "SUA_CHAVE_AQUI";
+    const model = state.models.find((m) => m.tier !== "paid")?.id || "glm-5.3-flash";
+    return {
+      curl: `curl ${baseUrl}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${key}" \\
+  -d '{
+    "model": "${model}",
+    "messages": [{ "role": "user", "content": "Olá!" }],
+    "stream": false
+  }'`,
+      node: `import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${baseUrl}",
+  apiKey: "${key}",
+});
+
+const stream = await client.chat.completions.create({
+  model: "${model}",
+  messages: [{ role: "user", content: "Olá!" }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}`,
+      python: `from openai import OpenAI
+
+client = OpenAI(
+    base_url="${baseUrl}",
+    api_key="${key}",
+)
+
+stream = client.chat.completions.create(
+    model="${model}",
+    messages=[{"role": "user", "content": "Olá!"}],
+    stream=True,
+)
+
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="")`,
+    };
+  };
+
+  function renderCodeExample() {
+    const samples = CODE_SAMPLES();
+    $("docsBaseUrl").value = `${window.location.origin}/v1`;
+    $("docsCodeExample").textContent = samples[state.codeTab] || samples.curl;
+  }
+
+  $("codeTabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-code]");
+    if (!btn) return;
+    qsa("#codeTabs button").forEach((b) => b.setAttribute("aria-selected", "false"));
+    btn.setAttribute("aria-selected", "true");
+    state.codeTab = btn.dataset.code;
+    renderCodeExample();
+  });
+
+  $("btnCopyCode").addEventListener("click", () => {
+    copyText($("docsCodeExample").textContent, "Exemplo copiado.");
+  });
+
+  /* ---------- Chave / segurança ---------- */
+  $("btnToggleKeyVisibility").addEventListener("click", () => {
+    const input = $("cfgProxyApiKey");
+    const showing = input.type === "text";
+    input.type = showing ? "password" : "text";
+    $("btnToggleKeyVisibility").innerHTML = icon(showing ? "i-eye" : "i-eye-off");
+  });
+
+  $("btnCopyProxyKey").addEventListener("click", () => {
+    copyText($("cfgProxyApiKey").value, "Chave do proxy copiada.");
+  });
+
+  $("btnCopyBaseUrl").addEventListener("click", () => {
+    copyText($("docsBaseUrl").value, "Base URL copiada.");
+  });
+
+  $("cfgRequireApiKey").addEventListener("change", async (e) => {
+    const next = e.target.checked;
+    try {
+      const data = await api("/api/config", { method: "PUT", body: { requireApiKey: next } });
+      if (data?.config) state.config = { ...state.config, ...data.config };
+      toast(next ? "Exigência de chave ativada." : "Exigência de chave desativada.", "ok");
+    } catch (err) {
+      e.target.checked = !next;
+      toast(`Erro: ${err.message}`, "err");
+    }
+  });
+
+  $("btnSaveConfig").addEventListener("click", async () => {
+    const proxyApiKey = $("cfgProxyApiKey").value.trim();
+    if (proxyApiKey.length < 8) return toast("A chave precisa de ao menos 8 caracteres.", "err");
+    const btn = $("btnSaveConfig");
+    btn.disabled = true;
+    btn.classList.add("is-busy");
+    try {
+      const data = await api("/api/config", {
+        method: "PUT",
+        body: { proxyApiKey, requireApiKey: $("cfgRequireApiKey").checked },
+      });
+      if (data?.config) state.config = { ...state.config, ...data.config };
+      renderConfig();
+      toast("Chave salva.", "ok");
+    } catch (err) {
+      toast(`Erro ao salvar: ${err.message}`, "err");
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("is-busy");
+    }
+  });
+
+  $("btnRotateProxyKey").addEventListener("click", async () => {
+    const ok = await confirmAction({
+      title: "Gerar nova chave?",
+      desc: "A chave atual deixa de funcionar imediatamente. Atualize as ferramentas já conectadas.",
+      confirm: "Gerar nova chave",
+    });
+    if (!ok) return;
+    try {
+      const data = await api("/api/config/rotate-key", { method: "POST", body: {} });
+      if (data?.config) state.config = { ...state.config, ...data.config };
+      else if (data?.proxyApiKey) state.config.proxyApiKey = data.proxyApiKey;
+      renderConfig();
+      toast("Nova chave gerada.", "ok");
+    } catch (err) {
+      toast(`Erro: ${err.message}`, "err");
+    }
+  });
+
+  /* ---------- Contexto ---------- */
+  $("btnSaveContextSettings").addEventListener("click", async () => {
+    const contextManagement = {
+      detectCompaction: $("cfgCtxDetect").value !== "off",
+    };
+    const btn = $("btnSaveContextSettings");
+    btn.disabled = true;
+    btn.classList.add("is-busy");
+    try {
+      const data = await api("/api/config", { method: "PUT", body: { contextManagement } });
+      if (data?.config) state.config = { ...state.config, ...data.config };
+      renderContextConfig();
+      toast("Configurações de contexto salvas.", "ok");
+    } catch (err) {
+      toast(`Erro: ${err.message}`, "err");
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("is-busy");
+    }
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Command palette                                                    */
+  /* ------------------------------------------------------------------ */
+
+  function buildCommands() {
+    const cmds = [
+      { label: "Ir para Dashboard", hint: "visão geral e métricas", icon: "i-grid", keys: "dashboard métricas tráfego", run: () => switchTab("dashboard") },
+      { label: "Ir para Contas", hint: "gerenciar contas", icon: "i-users", keys: "contas accounts login", run: () => switchTab("accounts") },
+      { label: "Ir para Modelos", hint: "catálogo de modelos", icon: "i-cpu", keys: "modelos catálogo", run: () => switchTab("models") },
+      { label: "Ir para Configurações", hint: "chave, contexto", icon: "i-sliders", keys: "configurações settings chave contexto", run: () => switchTab("settings") },
+      { label: "Conectar nova conta", hint: "abre o fluxo de login", icon: "i-bolt", keys: "conectar login oauth", run: () => { switchTab("accounts"); setTimeout(() => $("btnStartLogin").focus(), 120); } },
+      { label: "Atualizar todos os dados", hint: "recarrega agora", icon: "i-refresh", keys: "atualizar refresh recarregar", run: () => refreshAll().then(() => toast("Dados atualizados.", "ok")) },
+      { label: "Copiar Base URL", hint: "/v1", icon: "i-link", keys: "copiar base url endpoint", run: () => copyText(`${window.location.origin}/v1`, "Base URL copiada.") },
+      { label: "Copiar chave do proxy", hint: "Authorization: Bearer", icon: "i-key", keys: "copiar chave api key", run: () => copyText(state.config.proxyApiKey, "Chave copiada.") },
+      { label: "Exportar métricas", hint: "JSON", icon: "i-download", keys: "exportar baixar json métricas", run: () => $("btnExportMetrics").click() },
+      { label: "Resetar métricas", hint: "apaga histórico", icon: "i-trash", keys: "resetar limpar métricas", run: () => $("btnResetMetrics").click() },
+      { label: "Alternar tema", hint: "claro / escuro", icon: "i-moon", keys: "tema claro escuro theme", run: () => $("btnThemeToggle").click() },
+      { label: "Verificar saúde do proxy", hint: "/healthz", icon: "i-wifi", keys: "health status saúde proxy", run: async () => { const ok = await checkHealth(); toast(ok ? "Proxy online." : "Proxy offline.", ok ? "ok" : "err"); } },
+    ];
+    return cmds;
+  }
+
+  function openPalette() {
+    state.paletteOpen = true;
+    const pal = $("palette");
+    pal.hidden = false;
+    $("paletteInput").value = "";
+    state.paletteIndex = 0;
+    renderPalette("");
+    setTimeout(() => $("paletteInput").focus(), 30);
+  }
+
+  function closePalette() {
+    state.paletteOpen = false;
+    $("palette").hidden = true;
+  }
+
+  function renderPalette(query) {
+    const q = query.trim().toLowerCase();
+    const all = buildCommands();
+    const items = q
+      ? all.filter((c) => `${c.label} ${c.hint} ${c.keys}`.toLowerCase().includes(q))
+      : all;
+
+    state.paletteItems = items;
+    state.paletteIndex = Math.min(state.paletteIndex, Math.max(0, items.length - 1));
+
+    const list = $("paletteList");
+    const empty = $("paletteEmpty");
+    list.innerHTML = items
+      .map(
+        (c, i) => `<button class="palette-item ${i === state.paletteIndex ? "is-active" : ""}" role="option" aria-selected="${i === state.paletteIndex}" data-index="${i}" type="button">
+            ${icon(c.icon)}
+            <span>${esc(c.label)}<small>${esc(c.hint)}</small></span>
+            <kbd>↵</kbd>
+          </button>`
+      )
+      .join("");
+    empty.hidden = items.length > 0;
+  }
+
+  function runPalette(index) {
+    const cmd = state.paletteItems[index];
+    if (!cmd) return;
+    closePalette();
+    try {
+      cmd.run();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  $("btnCommand").addEventListener("click", openPalette);
+  $("palette").addEventListener("click", (e) => {
+    if (e.target === $("palette")) closePalette();
+  });
+  $("paletteInput").addEventListener("input", (e) => renderPalette(e.target.value));
+  $("paletteInput").addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      state.paletteIndex = Math.min(state.paletteItems.length - 1, state.paletteIndex + 1);
+      renderPalette($("paletteInput").value);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      state.paletteIndex = Math.max(0, state.paletteIndex - 1);
+      renderPalette($("paletteInput").value);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      runPalette(state.paletteIndex);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closePalette();
+    }
+  });
+  $("paletteList").addEventListener("click", (e) => {
+    const btn = e.target.closest(".palette-item");
+    if (!btn) return;
+    runPalette(Number(btn.dataset.index));
+  });
+  $("paletteList").addEventListener("mousemove", (e) => {
+    const btn = e.target.closest(".palette-item");
+    if (!btn) return;
+    const i = Number(btn.dataset.index);
+    if (i !== state.paletteIndex) {
+      state.paletteIndex = i;
+      qsa(".palette-item").forEach((el, idx) => {
+        el.classList.toggle("is-active", idx === i);
+        el.setAttribute("aria-selected", String(idx === i));
+      });
+    }
+  });
+
+  /* Atalhos globais */
+  document.addEventListener("keydown", (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    const tag = (document.activeElement?.tagName || "").toLowerCase();
+    const typing = tag === "input" || tag === "textarea" || tag === "select";
+
+    if (mod && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      if (state.paletteOpen) closePalette();
+      else openPalette();
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (state.paletteOpen) closePalette();
+      else if (!$("modal").hidden) {
+        /* modal trata o próprio Esc */
+      } else closeSidebar();
+      return;
+    }
+
+    if (typing) return;
+
+    const num = Number(e.key);
+    if (!e.altKey && num >= 1 && num <= 4) {
+      const tab = ["dashboard", "accounts", "models", "settings"][num - 1];
+      switchTab(tab);
+    } else if (e.key === "/") {
+      e.preventDefault();
+      if (state.tab === "models") $("modelsSearchInput").focus();
+      else openPalette();
+    } else if (e.key.toLowerCase() === "r" && !mod) {
+      refreshAll().then(() => toast("Dados atualizados.", "ok"));
+    }
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Refresh / ciclo de vida                                            */
+  /* ------------------------------------------------------------------ */
+
+  async function refreshAll() {
+    const btn = $("btnGlobalRefresh");
+    btn.disabled = true;
+    btn.classList.add("is-busy");
+    try {
+      await Promise.allSettled([checkHealth(), loadAccounts(), loadConfig(), loadModels()]);
+      if (state.tab === "dashboard" || state.tab === "accounts") await loadMetrics();
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("is-busy");
+    }
+  }
+
+  $("btnGlobalRefresh").addEventListener("click", async () => {
+    await refreshAll();
+    toast("Dados atualizados.", "ok");
+  });
+
+  $("autoRefreshToggle").addEventListener("change", (e) => {
+    state.autoRefresh = e.target.checked;
+    setupAutoRefresh();
+    toast(`Atualização automática ${state.autoRefresh ? "ativada" : "desativada"}.`, "info", 2200);
+  });
+
+  function setupAutoRefresh() {
+    if (state.refreshTimer) {
+      clearInterval(state.refreshTimer);
+      state.refreshTimer = null;
+    }
+    if (!state.autoRefresh) return;
+    state.refreshTimer = setInterval(() => {
+      if (document.hidden) return;
+      checkHealth();
+      if (state.tab === "dashboard") loadMetrics();
+    }, 5000);
+  }
+
+  /* Re-render do gráfico em resize */
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (state.tab === "dashboard") {
+        renderTimeSeriesChart(state.metrics?.timeSeries || state.metrics?.series || []);
+      }
+    }, 180);
+  });
 
   document.addEventListener("visibilitychange", () => {
-    if (
-      document.visibilityState === "visible" &&
-      state.sessionToken &&
-      state.activeTab === "panel"
-    ) {
-      refreshTelemetry();
-    }
+    if (!document.hidden && state.tab === "dashboard" && state.autoRefresh) loadMetrics();
   });
-}
 
-init();
+  /* Hash routing */
+  window.addEventListener("hashchange", () => {
+    const tab = window.location.hash.replace("#", "");
+    if (TAB_INFO[tab] && tab !== state.tab) switchTab(tab, { push: false });
+  });
+
+  /* Nota de plataforma no atalho do palette */
+  if (!/Mac|iPhone|iPad/i.test(navigator.platform || "")) {
+    $("cmdKbd").textContent = "Ctrl K";
+  } else {
+    $("cmdKbd").textContent = "⌘ K";
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Init                                                               */
+  /* ------------------------------------------------------------------ */
+
+  initTheme();
+  initRange();
+
+  const initialTab = window.location.hash.replace("#", "");
+  switchTab(TAB_INFO[initialTab] ? initialTab : "dashboard", { push: false });
+  refreshAll();
+  setupAutoRefresh();
+})();

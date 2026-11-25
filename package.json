@@ -1,16 +1,15 @@
 {
   "name": "deepai-proxy",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Proxy local OpenAI-compatible para contas DeepAI Code, com login por desktop_auth.",
+  "description": "Gateway local OpenAI-compatible para modelos DeepAI Code",
   "scripts": {
-    "start": "node src/server.mjs",
-    "dev": "node --watch src/server.mjs",
-    "reset-password": "node src/reset-password.mjs",
+    "start": "node index.mjs",
+    "dev": "node --watch index.mjs",
     "test": "node --test"
   },
   "engines": {
-    "node": ">=20.11"
+    "node": ">=20"
   }
 }
